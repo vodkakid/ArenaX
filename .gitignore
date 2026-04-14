@@ -1,0 +1,10 @@
+.env
+*.env
+*.db
+*.db-shm
+*.db-wal
+credentials.json
+__pycache__/
+*.pyc
+*.log
+.DS_Store

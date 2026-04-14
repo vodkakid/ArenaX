@@ -1,0 +1,59 @@
+═══════════════════════════════════════════════════════
+  ArenaX Bot v4 — Variables de entorno para Railway
+  Ve a: tu proyecto → Variables → agrega cada una
+═══════════════════════════════════════════════════════
+
+── OBLIGATORIAS ────────────────────────────────────────
+
+BOT_TOKEN
+  Token de @BotFather
+  Ejemplo: 7123456789:AABBCCDDEEFFaabbccddeeff
+
+ADMIN_ID
+  Tu Telegram User ID (número)
+  Obtén escribiéndole a @userinfobot en Telegram
+  Ejemplo: 123456789
+
+GROUP_ID
+  ID del grupo oficial ArenaX (número negativo)
+  Ejemplo: -1001234567890
+
+TOPIC_ANNOUNCEMENTS_ID
+  ID del tema Anuncios en el grupo
+  Valor: 2
+
+TOPIC_MATCHMAKING_ID
+  ID del tema Emparejamientos en el grupo
+  Valor: 32
+
+TOPIC_RESULTS_ID
+  ID del tema Resultados en el grupo
+  Valor: 14
+
+── DATOS DE PAGO MÓVIL ARENAX ──────────────────────────
+
+ARENAX_BANK
+  Ejemplo: Banesco (0134)
+
+ARENAX_PHONE
+  Ejemplo: 0412-1234567
+
+ARENAX_CEDULA
+  Ejemplo: V-12345678
+
+ARENAX_NAME
+  Ejemplo: ArenaX Games
+
+── OPCIONAL: GOOGLE SHEETS ─────────────────────────────
+
+SHEETS_SPREADSHEET_ID
+  ID de tu Google Sheet (en la URL del documento)
+
+GOOGLE_CREDENTIALS_JSON
+  Contenido completo del archivo credentials.json
+  (pegar todo el JSON como valor de la variable)
+
+═══════════════════════════════════════════════════════
+  IMPORTANTE: NO agregar CR_API_TOKEN ni CR_API_BYPASS
+  La v4 no usa la API de Clash Royale para nada
+═══════════════════════════════════════════════════════
