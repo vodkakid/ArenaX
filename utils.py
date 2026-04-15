@@ -1,5 +1,5 @@
 """
-Utilidades: horario, teclados, formateo — ArenaX v5
+Utilidades: horario, teclados, formateo — ArenaX v6
 """
 from datetime import datetime
 import pytz
@@ -32,7 +32,6 @@ def kb_main_menu():
 
 
 def kb_compete_again():
-    """Botón que aparece justo al terminar una partida."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚔️ Volver a competir", callback_data="menu_compete")],
         [InlineKeyboardButton("🏠 Menú principal",     callback_data="menu_main")],
@@ -102,23 +101,15 @@ def kb_profile_options():
 
 def kb_in_queue():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Salir de la cola (reembolso)", callback_data="leave_queue")],
+        [InlineKeyboardButton("❌ Salir de la cola (reembolso)",
+                              callback_data="leave_queue")],
     ])
 
 
 def kb_match_result(match_id: int):
-    """Botones para reportar resultado de partida."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏆 Yo gané",  callback_data=f"result_win_{match_id}"),
          InlineKeyboardButton("😞 Yo perdí", callback_data=f"result_lose_{match_id}")],
-    ])
-
-
-def kb_send_proof(match_id: int):
-    """Botón para enviar capture después de declarar victoria."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 Enviar capture de victoria",
-                              callback_data=f"send_proof_{match_id}")],
     ])
 
 
@@ -131,7 +122,7 @@ def kb_admin_main():
         [InlineKeyboardButton("🎮 Cola",        callback_data="admin_queue"),
          InlineKeyboardButton("⚔️ Partidas",    callback_data="admin_matches")],
         [InlineKeyboardButton("👥 Jugadores",   callback_data="admin_players"),
-         InlineKeyboardButton("📊 Stats",       callback_data="admin_stats")],
+         InlineKeyboardButton("📊 Estadísticas",callback_data="admin_stats")],
         [InlineKeyboardButton("💰 Finanzas",    callback_data="admin_finances"),
          InlineKeyboardButton("🏆 Torneos",     callback_data="admin_tournaments")],
         [InlineKeyboardButton("📢 Broadcast",   callback_data="admin_broadcast"),
@@ -158,7 +149,7 @@ def kb_withdrawal_review(wd_id: int):
 
 def kb_result_review(match_id: int, winner_id: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirmar victoria",
+        [InlineKeyboardButton("✅ Confirmar",
                               callback_data=f"res_approve_{match_id}_{winner_id}"),
          InlineKeyboardButton("❌ Rechazar",
                               callback_data=f"res_reject_{match_id}_{winner_id}")],
@@ -167,8 +158,10 @@ def kb_result_review(match_id: int, winner_id: int):
 
 def kb_dispute_resolve(dispute_id: int, p1_id: int, p2_id: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Gana J1", callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
-         InlineKeyboardButton("🏆 Gana J2", callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
+        [InlineKeyboardButton("🏆 Gana J1",
+                              callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
+         InlineKeyboardButton("🏆 Gana J2",
+                              callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
         [InlineKeyboardButton("❌ Anular (reembolso a ambos)",
                               callback_data=f"disp_void_{dispute_id}_0")],
     ])
@@ -201,6 +194,12 @@ def fmt_date(iso: str) -> str:
         return datetime.fromisoformat(iso).strftime("%d/%m/%Y %H:%M")
     except Exception:
         return iso or "N/A"
+
+
+def fmt_pct(wins: int, total: int) -> str:
+    if total == 0:
+        return "0%"
+    return f"{round(wins / total * 100)}%"
 
 
 GAME_MODE_LABELS = {

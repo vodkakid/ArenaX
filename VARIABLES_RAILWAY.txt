@@ -1,56 +1,21 @@
-═══════════════════════════════════════════════════════
-  ArenaX Bot v5 — Variables de entorno para Railway
-  Ve a: tu proyecto → Variables → agrega cada una
-═══════════════════════════════════════════════════════
+═══════════════════════════════════════════════════
+  ArenaX Bot v6 — Variables Railway
+  (Sin cambios respecto a v5, solo verifica)
+═══════════════════════════════════════════════════
 
-── OBLIGATORIAS ────────────────────────────────────────
+BOT_TOKEN              → Token de @BotFather
+ADMIN_ID               → Tu Telegram User ID
+ADMIN_CHANNEL_ID       → ID canal privado notificaciones
+GROUP_ID               → ID grupo oficial ArenaX
+TOPIC_ANNOUNCEMENTS_ID → 2
+TOPIC_MATCHMAKING_ID   → 32
+TOPIC_RESULTS_ID       → 14
+ARENAX_BANK            → Ej: Banesco (0134)
+ARENAX_PHONE           → Ej: 0412-1234567
+ARENAX_CEDULA          → Ej: V-12345678
+ARENAX_NAME            → Ej: ArenaX Games
 
-BOT_TOKEN
-  Token de @BotFather
-  Ejemplo: 7123456789:AABBCCDDEEFFaabbccddeeff
-
-ADMIN_ID
-  Tu Telegram User ID (número entero)
-  Obtén escribiéndole a @userinfobot
-  Ejemplo: 123456789
-
-ADMIN_CHANNEL_ID
-  ID de tu canal privado de notificaciones admin
-  El bot debe ser administrador del canal
-  Ejemplo: -1001234567890
-
-GROUP_ID
-  ID del grupo oficial ArenaX
-  Ejemplo: -1001234567890
-
-TOPIC_ANNOUNCEMENTS_ID = 2
-TOPIC_MATCHMAKING_ID   = 32
-TOPIC_RESULTS_ID       = 14
-
-── DATOS DE PAGO MÓVIL ARENAX ──────────────────────────
-
-ARENAX_BANK    → Ejemplo: Banesco (0134)
-ARENAX_PHONE   → Ejemplo: 0412-1234567
-ARENAX_CEDULA  → Ejemplo: V-12345678
-ARENAX_NAME    → Ejemplo: ArenaX Games
-
-── MODELO ECONÓMICO (opcionales, ya tienen valores) ────
-
-ENTRY_FEE_USD   = 1.50   (inscripción por partida)
-WIN_PRIZE_USD   = 1.00   (premio neto al ganador)
-MIN_WITHDRAW_USD= 2.50   (mínimo de retiro)
-
-── OPCIONAL: GOOGLE SHEETS ─────────────────────────────
-
-SHEETS_SPREADSHEET_ID
-  ID de tu Google Sheet
-
-GOOGLE_CREDENTIALS_JSON
-  Contenido completo del credentials.json como texto
-
-═══════════════════════════════════════════════════════
-  NOTAS IMPORTANTES v5:
-  - NO necesitas CR_API_TOKEN ni CR_API_BYPASS
-  - El ADMIN_CHANNEL_ID es nuevo — agrégalo
-  - Los jugadores ya pueden pagar con saldo disponible
-═══════════════════════════════════════════════════════
+OPCIONALES:
+ENTRY_FEE_USD    = 1.50
+WIN_PRIZE_USD    = 1.00
+MIN_WITHDRAW_USD = 2.50

@@ -1,14 +1,16 @@
 """
-Handlers comunes: /menu, /cancel, volver al menú.
+Handlers comunes v6 — incluye limpieza de estado para resolver
+el bug crítico donde /admin + /start rompe el botón competir.
 """
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 import database as db
-from utils import kb_main_menu, is_business_hours
-from config import ADMIN_IDS
+from utils import kb_main_menu
 
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Limpia todo estado y muestra el menú principal."""
+    ctx.user_data.clear()
     user   = update.effective_user
     player = db.get_player(user.id)
     if not player:
@@ -36,6 +38,7 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def back_to_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Volver al menú — limpia estado completamente."""
     await update.callback_query.answer()
     ctx.user_data.clear()
     user   = update.effective_user
@@ -45,4 +48,15 @@ async def back_to_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🏠 *Menú principal* — Hola, *{name}* 👋",
         parse_mode="Markdown",
         reply_markup=kb_main_menu()
+    )
+
+
+async def handle_stale_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Captura callbacks de botones viejos que ya no son válidos.
+    Evita que el bot se quede sin responder o rompa el estado.
+    """
+    await update.callback_query.answer(
+        "⚠️ Este botón ya no está activo. Usa /menu para continuar.",
+        show_alert=True
     )

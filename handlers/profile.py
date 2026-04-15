@@ -1,5 +1,5 @@
 """
-Perfil, balance, ranking, torneos, editar datos, retiros — v5
+Perfil v6: estadísticas completas, derrotas, % victorias, botón volver en balance.
 """
 import logging
 from telegram import Update
@@ -7,8 +7,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 import database as db
 import services
 from utils import (kb_main_menu, kb_banks, kb_back_to_menu, kb_profile_options,
-                   kb_confirm, fmt_usd, fmt_ves, fmt_date, mode_label,
-                   is_business_hours)
+                   kb_confirm, fmt_usd, fmt_ves, fmt_date, fmt_pct, mode_label,
+                   is_business_hours, kb_back_to_admin)
 from config import ADMIN_IDS, BANKS as BANKS_CONFIG, MIN_WITHDRAW_USD, ADMIN_CHANNEL_ID
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,12 @@ async def show_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text("⚠️ No tienes cuenta. Usa /start")
         return
 
-    status_icon = {"active": "🟢 Activo", "suspended": "🟡 Suspendido",
-                   "banned": "🔴 Baneado"}.get(player["status"], player["status"])
+    total    = player["total_matches"]
+    wins     = player["total_wins"]
+    losses   = player["total_losses"]
+    pct      = fmt_pct(wins, total)
+    status_i = {"active": "🟢 Activo", "suspended": "🟡 Suspendido",
+                 "banned": "🔴 Baneado"}.get(player["status"], player["status"])
 
     await update.callback_query.edit_message_text(
         f"👤 *Tu perfil — ArenaX*\n\n"
@@ -58,18 +62,20 @@ async def show_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🪪 *Cédula:* {player['cedula']}\n"
         f"🏦 *Banco:* {player['bank_name']}\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"⚔️ Victorias hoy: {player['wins_today']}\n"
-        f"🏆 Total victorias: {player['total_wins']}\n"
-        f"🎯 Partidas jugadas: {player['total_matches']}\n\n"
+        f"🎯 Partidas jugadas: {total}\n"
+        f"🏆 Victorias hoy: {player['wins_today']} | 😞 Derrotas hoy: {player['losses_today']}\n"
+        f"📈 Total victorias: {wins} | Total derrotas: {losses}\n"
+        f"🎯 % Victorias: {pct}\n"
+        f"🔥 Racha actual: {player['streak_current']} | Mejor racha: {player['streak_best']}\n\n"
         f"💰 *Balance:* {fmt_usd(player['balance_usd'])}\n"
-        f"📊 Estado: {status_icon}\n"
+        f"📊 Estado: {status_i}\n"
         f"📅 Registro: {fmt_date(player['registered_at'])}",
         parse_mode="Markdown",
         reply_markup=kb_profile_options()
     )
 
 
-# ── Balance / historial ───────────────────────────────────────────────────────
+# ── Balance ───────────────────────────────────────────────────────────────────
 
 async def show_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -90,8 +96,9 @@ async def show_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
     await update.callback_query.edit_message_text(
-        "\n".join(lines), parse_mode="Markdown",
-        reply_markup=kb_main_menu()
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=kb_back_to_menu()   # ← botón volver
     )
 
 
@@ -103,8 +110,9 @@ async def show_ranking(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not ranking:
         await update.callback_query.edit_message_text(
-            "📊 *Ranking del día*\n\n_Aún no hay victorias hoy._",
-            parse_mode="Markdown", reply_markup=kb_main_menu()
+            "📊 *Ranking del día*\n\n_Aún no hay partidas hoy._",
+            parse_mode="Markdown",
+            reply_markup=kb_back_to_menu()
         )
         return
 
@@ -112,13 +120,15 @@ async def show_ranking(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines  = ["🏆 *Ranking del día — ArenaX*\n"]
     for i, p in enumerate(ranking):
         medal = medals[i] if i < 3 else f"{i+1}."
+        pct   = fmt_pct(p["wins_today"], p["wins_today"] + p["losses_today"])
         lines.append(
             f"{medal} *{p['cr_name']}* — "
-            f"{p['wins_today']} victorias hoy"
+            f"{p['wins_today']}V {p['losses_today']}D ({pct}) "
+            f"{'🔥×'+str(p['streak_current']) if p['streak_current'] > 1 else ''}"
         )
     await update.callback_query.edit_message_text(
         "\n".join(lines), parse_mode="Markdown",
-        reply_markup=kb_main_menu()
+        reply_markup=kb_back_to_menu()
     )
 
 
@@ -134,7 +144,7 @@ async def show_tournaments(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "_No hay torneos activos ahora mismo._\n"
             "¡Estate atento a los anuncios del grupo! 📢",
             parse_mode="Markdown",
-            reply_markup=kb_main_menu()
+            reply_markup=kb_back_to_menu()
         )
         return
 
@@ -150,11 +160,11 @@ async def show_tournaments(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     await update.callback_query.edit_message_text(
         "\n".join(lines), parse_mode="Markdown",
-        reply_markup=kb_main_menu()
+        reply_markup=kb_back_to_menu()
     )
 
 
-# ── Editar datos de pago ──────────────────────────────────────────────────────
+# ── Editar pago móvil ─────────────────────────────────────────────────────────
 
 async def start_edit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -196,7 +206,7 @@ async def edit_bank(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["edit_bank_name"] = bank_name
     await update.callback_query.edit_message_text(
         f"✅ Banco: *{bank_name}*\n\n"
-        "🔗 Ingresa tu nuevo *link de amistad de Clash Royale*:",
+        "🔗 Ingresa tu nuevo *link de amistad*:",
         parse_mode="Markdown"
     )
     return EDIT_FRIEND
@@ -204,17 +214,17 @@ async def edit_bank(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def edit_friend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    link = update.message.text.strip()
     ud   = ctx.user_data
     db.update_player_payment_data(
         user.id, ud["edit_phone"], ud["edit_cedula"],
         ud["edit_bank_code"], ud["edit_bank_name"]
     )
-    db.update_player_friend_link(user.id, link)
+    db.update_player_friend_link(user.id, update.message.text.strip())
     ctx.user_data.clear()
     await update.message.reply_text(
         "✅ *Datos actualizados correctamente.*",
-        parse_mode="Markdown", reply_markup=kb_main_menu()
+        parse_mode="Markdown",
+        reply_markup=kb_main_menu()
     )
     return ConversationHandler.END
 
@@ -229,7 +239,8 @@ async def start_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_business_hours():
         await update.callback_query.edit_message_text(
             "🕙 Los retiros solo se procesan de *10am a 10pm* (hora Venezuela).",
-            parse_mode="Markdown", reply_markup=kb_back_to_menu()
+            parse_mode="Markdown",
+            reply_markup=kb_back_to_menu()
         )
         return ConversationHandler.END
 
@@ -238,7 +249,8 @@ async def start_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(
             f"💰 Balance actual: {fmt_usd(balance)}\n\n"
             f"El mínimo de retiro es *{fmt_usd(MIN_WITHDRAW_USD)}*.",
-            parse_mode="Markdown", reply_markup=kb_main_menu()
+            parse_mode="Markdown",
+            reply_markup=kb_back_to_menu()
         )
         return ConversationHandler.END
 
@@ -271,7 +283,7 @@ async def confirm_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if amount < MIN_WITHDRAW_USD:
         await update.message.reply_text(
-            f"⚠️ Mínimo de retiro: {fmt_usd(MIN_WITHDRAW_USD)}"
+            f"⚠️ Mínimo: {fmt_usd(MIN_WITHDRAW_USD)}"
         )
         return WITHDRAW_AMOUNT
     if amount > balance:
@@ -284,9 +296,7 @@ async def confirm_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["wd_amount"] = amount
     ctx.user_data["wd_ves"]    = ves
 
-    user   = update.effective_user
-    player = db.get_player(user.id)
-
+    player = db.get_player(update.effective_user.id)
     await update.message.reply_text(
         f"📋 *Confirmar retiro*\n\n"
         f"💵 {fmt_usd(amount)} = *{fmt_ves(ves)}*\n"
@@ -306,7 +316,10 @@ async def execute_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     if update.callback_query.data == "withdraw_no":
         ctx.user_data.clear()
-        await update.callback_query.edit_message_text("❌ Retiro cancelado.")
+        await update.callback_query.edit_message_text(
+            "❌ Retiro cancelado.",
+            reply_markup=kb_back_to_menu()
+        )
         return ConversationHandler.END
 
     user   = update.effective_user
@@ -324,7 +337,8 @@ async def execute_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.edit_message_text(
         f"✅ *Solicitud #{wd_id} enviada.*\n"
         "El administrador procesará tu retiro en breve.",
-        parse_mode="Markdown", reply_markup=kb_main_menu()
+        parse_mode="Markdown",
+        reply_markup=kb_back_to_menu()
     )
 
     from utils import kb_withdrawal_review
