@@ -353,10 +353,8 @@ def main():
                                          pattern="^wd_approve_"))
     app.add_handler(CallbackQueryHandler(admin.reject_withdraw,
                                          pattern="^wd_reject_"))
-    app.add_handler(CallbackQueryHandler(admin.approve_result,
-                                         pattern="^res_approve_"))
-    app.add_handler(CallbackQueryHandler(admin.reject_result,
-                                         pattern="^res_reject_"))
+    # approve_result / reject_result eliminados en v6.2
+    # Las disputas se resuelven directamente con resolve_dispute
     app.add_handler(CallbackQueryHandler(admin.resolve_dispute,
                                          pattern="^disp_"))
     app.add_handler(CallbackQueryHandler(admin.remove_from_queue,
