@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════
-  ArenaX Bot v4 — Variables de entorno para Railway
+  ArenaX Bot v5 — Variables de entorno para Railway
   Ve a: tu proyecto → Variables → agrega cada una
 ═══════════════════════════════════════════════════════
 
@@ -10,50 +10,47 @@ BOT_TOKEN
   Ejemplo: 7123456789:AABBCCDDEEFFaabbccddeeff
 
 ADMIN_ID
-  Tu Telegram User ID (número)
-  Obtén escribiéndole a @userinfobot en Telegram
+  Tu Telegram User ID (número entero)
+  Obtén escribiéndole a @userinfobot
   Ejemplo: 123456789
 
-GROUP_ID
-  ID del grupo oficial ArenaX (número negativo)
+ADMIN_CHANNEL_ID
+  ID de tu canal privado de notificaciones admin
+  El bot debe ser administrador del canal
   Ejemplo: -1001234567890
 
-TOPIC_ANNOUNCEMENTS_ID
-  ID del tema Anuncios en el grupo
-  Valor: 2
+GROUP_ID
+  ID del grupo oficial ArenaX
+  Ejemplo: -1001234567890
 
-TOPIC_MATCHMAKING_ID
-  ID del tema Emparejamientos en el grupo
-  Valor: 32
-
-TOPIC_RESULTS_ID
-  ID del tema Resultados en el grupo
-  Valor: 14
+TOPIC_ANNOUNCEMENTS_ID = 2
+TOPIC_MATCHMAKING_ID   = 32
+TOPIC_RESULTS_ID       = 14
 
 ── DATOS DE PAGO MÓVIL ARENAX ──────────────────────────
 
-ARENAX_BANK
-  Ejemplo: Banesco (0134)
+ARENAX_BANK    → Ejemplo: Banesco (0134)
+ARENAX_PHONE   → Ejemplo: 0412-1234567
+ARENAX_CEDULA  → Ejemplo: V-12345678
+ARENAX_NAME    → Ejemplo: ArenaX Games
 
-ARENAX_PHONE
-  Ejemplo: 0412-1234567
+── MODELO ECONÓMICO (opcionales, ya tienen valores) ────
 
-ARENAX_CEDULA
-  Ejemplo: V-12345678
-
-ARENAX_NAME
-  Ejemplo: ArenaX Games
+ENTRY_FEE_USD   = 1.50   (inscripción por partida)
+WIN_PRIZE_USD   = 1.00   (premio neto al ganador)
+MIN_WITHDRAW_USD= 2.50   (mínimo de retiro)
 
 ── OPCIONAL: GOOGLE SHEETS ─────────────────────────────
 
 SHEETS_SPREADSHEET_ID
-  ID de tu Google Sheet (en la URL del documento)
+  ID de tu Google Sheet
 
 GOOGLE_CREDENTIALS_JSON
-  Contenido completo del archivo credentials.json
-  (pegar todo el JSON como valor de la variable)
+  Contenido completo del credentials.json como texto
 
 ═══════════════════════════════════════════════════════
-  IMPORTANTE: NO agregar CR_API_TOKEN ni CR_API_BYPASS
-  La v4 no usa la API de Clash Royale para nada
+  NOTAS IMPORTANTES v5:
+  - NO necesitas CR_API_TOKEN ni CR_API_BYPASS
+  - El ADMIN_CHANNEL_ID es nuevo — agrégalo
+  - Los jugadores ya pueden pagar con saldo disponible
 ═══════════════════════════════════════════════════════

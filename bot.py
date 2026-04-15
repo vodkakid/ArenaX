@@ -1,5 +1,5 @@
 """
-ArenaX Bot v4
+ArenaX Bot v5
 """
 import logging
 from telegram.ext import (
@@ -74,10 +74,12 @@ def main():
         entry_points=[CallbackQueryHandler(competition.start_compete, pattern="^menu_compete$")],
         states={
             competition.SELECT_MODE:     [
-                CallbackQueryHandler(competition.select_mode, pattern="^mode_")
+                CallbackQueryHandler(competition.select_mode,   pattern="^mode_"),
             ],
             competition.WAITING_PAYMENT: [
-                MessageHandler(filters.PHOTO, competition.receive_payment_proof)
+                MessageHandler(filters.PHOTO, competition.receive_payment_proof),
+                CallbackQueryHandler(competition.pay_from_balance, pattern="^pay_from_balance$"),
+                CallbackQueryHandler(competition.pay_mobile,        pattern="^pay_mobile$"),
             ],
         },
         fallbacks=[
@@ -115,7 +117,7 @@ def main():
         per_message=False,
     )
 
-    # ── Torneo (admin) ─────────────────────────────────────────────────────────
+    # ── Torneo ─────────────────────────────────────────────────────────────────
     tournament_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin.create_tournament_start,
                                            pattern="^admin_tournament_create$")],
@@ -125,8 +127,8 @@ def main():
                 CallbackQueryHandler(admin.back_to_admin, pattern="^admin_back$"),
             ],
             admin.TOURN_MODE:    [
-                CallbackQueryHandler(admin.tourn_mode, pattern="^mode_"),
-                CallbackQueryHandler(admin.back_to_admin, pattern="^admin_back$"),
+                CallbackQueryHandler(admin.tourn_mode,      pattern="^mode_"),
+                CallbackQueryHandler(admin.back_to_admin,   pattern="^admin_back$"),
             ],
             admin.TOURN_FEE:     [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin.tourn_fee),
@@ -206,7 +208,7 @@ def main():
         per_message=False,
     )
 
-    # ── Disputa ────────────────────────────────────────────────────────────────
+    # ── Disputa manual ─────────────────────────────────────────────────────────
     dispute_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(competition.open_dispute, pattern="^dispute_")],
         states={
@@ -218,7 +220,7 @@ def main():
         per_message=False,
     )
 
-    # ── Registrar handlers ─────────────────────────────────────────────────────
+    # ── Registrar todos ────────────────────────────────────────────────────────
     for conv in [reset_conv, reg_conv, comp_conv, edit_conv, withdraw_conv,
                  tournament_conv, broadcast_conv, manage_conv, texts_conv,
                  result_conv, dispute_conv]:
@@ -229,14 +231,17 @@ def main():
     app.add_handler(CommandHandler("admin", admin.cmd_admin_panel))
     app.add_handler(CommandHandler("sync",  admin.cmd_sync_sheets))
 
-    # Callbacks menú jugador
+    # Menú jugador
     app.add_handler(CallbackQueryHandler(profile.show_profile,     pattern="^menu_profile$"))
     app.add_handler(CallbackQueryHandler(profile.show_balance,     pattern="^menu_balance$"))
     app.add_handler(CallbackQueryHandler(profile.show_ranking,     pattern="^menu_ranking$"))
     app.add_handler(CallbackQueryHandler(profile.show_tournaments, pattern="^menu_tournaments$"))
     app.add_handler(CallbackQueryHandler(common.back_to_menu,      pattern="^menu_main$"))
 
-    # Callbacks panel admin
+    # Resultado "Yo gané / Yo perdí"
+    app.add_handler(CallbackQueryHandler(competition.handle_result, pattern="^result_(win|lose)_"))
+
+    # Panel admin
     app.add_handler(CallbackQueryHandler(admin.admin_payments,    pattern="^admin_payments$"))
     app.add_handler(CallbackQueryHandler(admin.admin_withdrawals, pattern="^admin_withdrawals$"))
     app.add_handler(CallbackQueryHandler(admin.admin_queue,       pattern="^admin_queue$"))
@@ -260,11 +265,11 @@ def main():
     app.add_handler(CallbackQueryHandler(admin.resolve_dispute,   pattern="^disp_"))
     app.add_handler(CallbackQueryHandler(admin.remove_from_queue, pattern="^queue_remove_"))
 
-    # Salir de la cola
+    # Cola
     app.add_handler(CallbackQueryHandler(competition.leave_queue, pattern="^leave_queue$"))
 
     setup_jobs(app)
-    logger.info("ArenaX Bot v4 iniciado ✅")
+    logger.info("ArenaX Bot v5 iniciado ✅")
     app.run_polling(drop_pending_updates=True,
                     allowed_updates=["message", "callback_query"])
 

@@ -140,6 +140,14 @@ def init_db():
         created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS match_reports (
+        match_id    INTEGER NOT NULL,
+        player_id   INTEGER NOT NULL,
+        outcome     TEXT NOT NULL,
+        reported_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(match_id, player_id)
+    );
+
     CREATE TABLE IF NOT EXISTS bot_texts (
         key        TEXT PRIMARY KEY,
         value      TEXT NOT NULL,
@@ -373,7 +381,7 @@ def get_pending_payments():
 
 # ── Partidas ──────────────────────────────────────────────────────────────────
 
-def create_match(player1_id, player2_id, game_mode, prize_usd):
+def create_match(player1_id, player2_id, game_mode, prize_usd=0):
     with get_conn() as conn:
         c = conn.cursor()
         c.execute("""
@@ -557,3 +565,30 @@ def get_stats():
         od = conn.execute("SELECT COUNT(*) FROM disputes WHERE status='open'").fetchone()[0]
         return {"total_players": tp, "active_players": ap, "total_matches": tm,
                 "today_matches": td, "queue_count": qc, "open_disputes": od}
+
+
+# ── Reportes de resultado ─────────────────────────────────────────────────────
+
+def set_match_report(match_id: int, player_id: int, outcome: str):
+    """Guarda el reporte de resultado de un jugador (win/lose)."""
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO match_reports(match_id, player_id, outcome)
+            VALUES(?,?,?)
+        """, (match_id, player_id, outcome))
+        conn.commit()
+
+
+def get_match_report(match_id: int, player_id: int):
+    """Obtiene el reporte de un jugador para una partida. None si no ha reportado."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM match_reports WHERE match_id=? AND player_id=?",
+            (match_id, player_id)
+        ).fetchone()
+
+
+def update_match_status(match_id: int, status: str):
+    with get_conn() as conn:
+        conn.execute("UPDATE matches SET status=? WHERE id=?", (status, match_id))
+        conn.commit()

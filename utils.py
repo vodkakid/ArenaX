@@ -1,5 +1,5 @@
 """
-Utilidades: horario, teclados, formateo.
+Utilidades: horario, teclados, formateo — ArenaX v5
 """
 from datetime import datetime
 import pytz
@@ -31,6 +31,14 @@ def kb_main_menu():
     ])
 
 
+def kb_compete_again():
+    """Botón que aparece justo al terminar una partida."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚔️ Volver a competir", callback_data="menu_compete")],
+        [InlineKeyboardButton("🏠 Menú principal",     callback_data="menu_main")],
+    ])
+
+
 def kb_terms():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Acepto los T&C", callback_data="tc_accept")],
@@ -40,8 +48,8 @@ def kb_terms():
 
 def kb_confirm_tag():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Sí, es mi tag",    callback_data="tag_ok")],
-        [InlineKeyboardButton("❌ Corregir tag",      callback_data="tag_no")],
+        [InlineKeyboardButton("✅ Sí, es mi tag",  callback_data="tag_ok")],
+        [InlineKeyboardButton("❌ Corregir tag",   callback_data="tag_no")],
     ])
 
 
@@ -84,7 +92,7 @@ def kb_back_to_admin():
     ])
 
 
-def kb_profile_edit():
+def kb_profile_options():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📱 Editar pago móvil",   callback_data="profile_edit")],
         [InlineKeyboardButton("🔗 Editar link amistad", callback_data="profile_edit_friend")],
@@ -98,10 +106,19 @@ def kb_in_queue():
     ])
 
 
-def kb_report_or_dispute(match_id: int):
+def kb_match_result(match_id: int):
+    """Botones para reportar resultado de partida."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Reportar victoria", callback_data=f"report_result_{match_id}")],
-        [InlineKeyboardButton("⚠️ Abrir disputa",     callback_data=f"dispute_{match_id}")],
+        [InlineKeyboardButton("🏆 Yo gané",  callback_data=f"result_win_{match_id}"),
+         InlineKeyboardButton("😞 Yo perdí", callback_data=f"result_lose_{match_id}")],
+    ])
+
+
+def kb_send_proof(match_id: int):
+    """Botón para enviar capture después de declarar victoria."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Enviar capture de victoria",
+                              callback_data=f"send_proof_{match_id}")],
     ])
 
 
@@ -109,19 +126,19 @@ def kb_report_or_dispute(match_id: int):
 
 def kb_admin_main():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Pagos pendientes",   callback_data="admin_payments"),
-         InlineKeyboardButton("💸 Retiros pendientes", callback_data="admin_withdrawals")],
-        [InlineKeyboardButton("🎮 Cola",               callback_data="admin_queue"),
-         InlineKeyboardButton("⚔️ Partidas",           callback_data="admin_matches")],
-        [InlineKeyboardButton("👥 Jugadores",          callback_data="admin_players"),
-         InlineKeyboardButton("📊 Estadísticas",       callback_data="admin_stats")],
-        [InlineKeyboardButton("💰 Finanzas",           callback_data="admin_finances"),
-         InlineKeyboardButton("🏆 Torneos",            callback_data="admin_tournaments")],
-        [InlineKeyboardButton("📢 Broadcast",          callback_data="admin_broadcast"),
-         InlineKeyboardButton("📝 Editar textos",      callback_data="admin_edit_texts")],
-        [InlineKeyboardButton("🔢 Límite victorias",   callback_data="admin_win_limit"),
-         InlineKeyboardButton("🔄 Sync Sheets",        callback_data="admin_sync_sheets")],
-        [InlineKeyboardButton("⚖️ Disputas abiertas",  callback_data="admin_disputes")],
+        [InlineKeyboardButton("💳 Pagos",       callback_data="admin_payments"),
+         InlineKeyboardButton("💸 Retiros",     callback_data="admin_withdrawals")],
+        [InlineKeyboardButton("🎮 Cola",        callback_data="admin_queue"),
+         InlineKeyboardButton("⚔️ Partidas",    callback_data="admin_matches")],
+        [InlineKeyboardButton("👥 Jugadores",   callback_data="admin_players"),
+         InlineKeyboardButton("📊 Stats",       callback_data="admin_stats")],
+        [InlineKeyboardButton("💰 Finanzas",    callback_data="admin_finances"),
+         InlineKeyboardButton("🏆 Torneos",     callback_data="admin_tournaments")],
+        [InlineKeyboardButton("📢 Broadcast",   callback_data="admin_broadcast"),
+         InlineKeyboardButton("📝 Textos",      callback_data="admin_edit_texts")],
+        [InlineKeyboardButton("🔢 Límite wins", callback_data="admin_win_limit"),
+         InlineKeyboardButton("🔄 Sheets",      callback_data="admin_sync_sheets")],
+        [InlineKeyboardButton("⚖️ Disputas",    callback_data="admin_disputes")],
     ])
 
 
@@ -150,11 +167,9 @@ def kb_result_review(match_id: int, winner_id: int):
 
 def kb_dispute_resolve(dispute_id: int, p1_id: int, p2_id: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Gana Jugador 1",
-                              callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
-         InlineKeyboardButton("🏆 Gana Jugador 2",
-                              callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
-        [InlineKeyboardButton("❌ Anular partida",
+        [InlineKeyboardButton("🏆 Gana J1", callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
+         InlineKeyboardButton("🏆 Gana J2", callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
+        [InlineKeyboardButton("❌ Anular (reembolso a ambos)",
                               callback_data=f"disp_void_{dispute_id}_0")],
     ])
 
@@ -190,7 +205,7 @@ def fmt_date(iso: str) -> str:
 
 GAME_MODE_LABELS = {
     "1v1":    "⚔️ 1vs1",
-    "triple": "🃏 Triple Elección",
+    "triple": "🃏 Triple Elixir",
 }
 
 

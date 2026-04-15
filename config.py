@@ -6,26 +6,35 @@ BOT_TOKEN  = os.getenv("BOT_TOKEN", "")
 ADMIN_ID   = int(os.getenv("ADMIN_ID", "0"))
 ADMIN_IDS  = [ADMIN_ID]
 
+# Grupo oficial ArenaX (para publicar emparejamientos y resultados)
 GROUP_ID               = int(os.getenv("GROUP_ID", "0"))
 TOPIC_ANNOUNCEMENTS_ID = int(os.getenv("TOPIC_ANNOUNCEMENTS_ID", "2"))
 TOPIC_MATCHMAKING_ID   = int(os.getenv("TOPIC_MATCHMAKING_ID", "32"))
 TOPIC_RESULTS_ID       = int(os.getenv("TOPIC_RESULTS_ID", "14"))
+
+# Canal privado del admin (notificaciones de pagos, resultados, disputas)
+# El bot debe ser admin de este canal
+ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID", "0"))
 
 SHEETS_CREDENTIALS_FILE = os.getenv("SHEETS_CREDENTIALS_FILE", "credentials.json")
 SHEETS_SPREADSHEET_ID   = os.getenv("SHEETS_SPREADSHEET_ID", "")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "arenax.db")
 
-ENTRY_FEE_USD    = float(os.getenv("ENTRY_FEE_USD", "1.50"))
+# ── Modelo económico ──────────────────────────────────────────────────────────
+ENTRY_FEE_USD  = float(os.getenv("ENTRY_FEE_USD", "1.50"))   # Costo inscripción
+WIN_PRIZE_USD  = float(os.getenv("WIN_PRIZE_USD",  "1.00"))   # Premio neto al ganador
+# Ganador recibe: WIN_PRIZE_USD + ENTRY_FEE_USD = 2.50 USD total
+# ArenaX gana:   ENTRY_FEE_USD (perdedor) - WIN_PRIZE_USD = 0.50 USD por partida
+
 MIN_WITHDRAW_USD = float(os.getenv("MIN_WITHDRAW_USD", "2.50"))
-PRIZE_POOL_PCT   = float(os.getenv("PRIZE_POOL_PCT", "0.85"))
 
 BUSINESS_HOUR_OPEN  = 10
 BUSINESS_HOUR_CLOSE = 22
 
 GAME_MODES = {
     "1v1":    "⚔️ 1vs1 — Duelo Clásico",
-    "triple": "🃏 Triple Elección",
+    "triple": "🃏 Triple Elixir",
 }
 
 BANKS = [
@@ -51,8 +60,8 @@ BANKS = [
 ]
 
 ARENAX_PAYMENT = {
-    "bank":   os.getenv("ARENAX_BANK", "Banesco (0134)"),
-    "phone":  os.getenv("ARENAX_PHONE", "0412-0000000"),
+    "bank":   os.getenv("ARENAX_BANK",   "Banesco (0134)"),
+    "phone":  os.getenv("ARENAX_PHONE",  "0412-0000000"),
     "cedula": os.getenv("ARENAX_CEDULA", "V-00000000"),
-    "name":   os.getenv("ARENAX_NAME", "ArenaX"),
+    "name":   os.getenv("ARENAX_NAME",   "ArenaX"),
 }
