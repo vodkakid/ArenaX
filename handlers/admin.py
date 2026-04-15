@@ -1,9 +1,7 @@
 """
-Panel admin v6.1:
-- Límite victorias: ConversationHandler propio, rango 1-20
-- back_to_admin bloqueado en canales
-- try_match llamado con application para timeout
-- Broadcast no captura número de límite
+Panel admin v6.2 — resolve_dispute simplificado:
+el admin solo decide [Gana J1] [Gana J2] [Anular]
+sin aprobar/rechazar captures individuales.
 """
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -17,8 +15,8 @@ from utils import (
     fmt_usd, fmt_ves, fmt_date, fmt_pct, mode_label,
 )
 from config import (
-    ADMIN_IDS, GROUP_ID, TOPIC_RESULTS_ID, TOPIC_ANNOUNCEMENTS_ID,
-    ADMIN_CHANNEL_ID, WIN_PRIZE_USD, ENTRY_FEE_USD,
+    ADMIN_IDS, GROUP_ID, TOPIC_ANNOUNCEMENTS_ID,
+    ADMIN_CHANNEL_ID, ENTRY_FEE_USD,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +25,7 @@ BROADCAST_MSG, BROADCAST_OK               = range(30, 32)
 MANAGE_SEARCH, MANAGE_ACTION, MANAGE_BALANCE = range(32, 35)
 TOURN_NAME, TOURN_MODE, TOURN_FEE, TOURN_PRIZE, TOURN_CONFIRM = range(35, 40)
 EDIT_TEXT_SELECT, EDIT_TEXT_INPUT         = range(40, 42)
-WIN_LIMIT_INPUT                           = 42   # ← En su propio ConversationHandler
+WIN_LIMIT_INPUT                           = 42
 
 
 def is_admin(uid): return uid in ADMIN_IDS
@@ -65,11 +63,7 @@ async def cmd_admin_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def back_to_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Volver al panel admin.
-    BLOQUEADO en canales — el panel solo funciona en chat privado.
-    """
-    # Si viene de un canal, solo cerrar sin abrir el panel
+    # Bloquear en canales
     if update.effective_chat and update.effective_chat.type == "channel":
         await update.callback_query.answer(
             "El panel admin solo está disponible en el chat privado del bot.",
@@ -165,16 +159,18 @@ async def approve_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer("⚠️ Ya procesado", show_alert=True)
         return
     db.update_payment_status(pay_id, "approved", update.effective_user.id)
-    await update.callback_query.edit_message_caption(
-        (update.callback_query.message.caption or "") + "\n\n✅ *APROBADO*",
-        parse_mode="Markdown"
-    )
+    try:
+        await update.callback_query.edit_message_caption(
+            (update.callback_query.message.caption or "") + "\n\n✅ *APROBADO*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
     await update.get_bot().send_message(
         pay["telegram_id"],
         f"✅ *Pago aprobado.* Entrando en cola para {mode_label(pay['game_mode'])}... ⏳",
         parse_mode="Markdown"
     )
-    # ← Pasar ctx.application para que funcione el timeout
     from handlers.competition import try_match
     await try_match(
         update.get_bot(), pay["telegram_id"], pay["game_mode"], pay_id,
@@ -191,10 +187,13 @@ async def reject_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer("⚠️ Ya procesado", show_alert=True)
         return
     db.update_payment_status(pay_id, "rejected", update.effective_user.id)
-    await update.callback_query.edit_message_caption(
-        (update.callback_query.message.caption or "") + "\n\n❌ *RECHAZADO*",
-        parse_mode="Markdown"
-    )
+    try:
+        await update.callback_query.edit_message_caption(
+            (update.callback_query.message.caption or "") + "\n\n❌ *RECHAZADO*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
     await update.get_bot().send_message(
         pay["telegram_id"],
         "❌ *Pago rechazado.* Contacta al administrador si crees que es un error.",
@@ -239,59 +238,7 @@ async def reject_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── Resultados ────────────────────────────────────────────────────────────────
-
-@admin_only
-async def approve_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    parts     = update.callback_query.data.replace("res_approve_", "").split("_")
-    match_id  = int(parts[0])
-    winner_id = int(parts[1])
-    match     = db.get_match(match_id)
-    if not match or match["status"] not in ("active", "disputed"):
-        await update.callback_query.answer("⚠️ Ya procesada", show_alert=True)
-        return
-    loser_id = (match["player2_id"] if match["player1_id"] == winner_id
-                else match["player1_id"])
-    from handlers.competition import _finalize_match_auto
-    await _finalize_match_auto(
-        update.get_bot(), match_id, winner_id, loser_id, match["game_mode"]
-    )
-    try:
-        await update.callback_query.edit_message_caption(
-            (update.callback_query.message.caption or "") + "\n\n✅ *Victoria confirmada*",
-            parse_mode="Markdown"
-        )
-    except Exception:
-        pass
-
-
-@admin_only
-async def reject_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    parts    = update.callback_query.data.replace("res_reject_", "").split("_")
-    match_id = int(parts[0])
-    db.update_match_status(match_id, "disputed")
-    try:
-        await update.callback_query.edit_message_caption(
-            (update.callback_query.message.caption or "") +
-            "\n\n⚠️ *Resultado rechazado — en disputa*",
-            parse_mode="Markdown"
-        )
-    except Exception:
-        pass
-    match = db.get_match(match_id)
-    for pid in [match["player1_id"], match["player2_id"]]:
-        try:
-            await update.get_bot().send_message(
-                pid,
-                f"⚠️ El resultado de Partida #{match_id} fue rechazado."
-            )
-        except Exception:
-            pass
-
-
-# ── Disputas ──────────────────────────────────────────────────────────────────
+# ── Disputas — admin decide directamente el ganador ───────────────────────────
 
 @admin_only
 async def admin_disputes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -308,6 +255,8 @@ async def admin_disputes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     for d in disputes:
         match = db.get_match(d["match_id"])
+        if not match:
+            continue
         try:
             await update.get_bot().send_message(
                 update.effective_user.id,
@@ -326,21 +275,30 @@ async def admin_disputes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def resolve_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin decide el ganador de la disputa.
+    Tres opciones: Gana J1 / Gana J2 / Anular con reembolso.
+    """
     await update.callback_query.answer()
     parts      = update.callback_query.data.split("_")
-    action     = parts[1]
+    action     = parts[1]         # "p1", "p2" o "void"
     dispute_id = int(parts[2])
     winner_raw = int(parts[3])
 
     disputes = db.get_open_disputes()
     dispute  = next((d for d in disputes if d["id"] == dispute_id), None)
     if not dispute:
-        await update.callback_query.answer("⚠️ No encontrada", show_alert=True)
+        await update.callback_query.answer("⚠️ Disputa no encontrada", show_alert=True)
         return
 
     match = db.get_match(dispute["match_id"])
+    if not match:
+        await update.callback_query.answer("⚠️ Partida no encontrada", show_alert=True)
+        return
 
     if action == "void":
+        # Anular — reembolso a ambos
+        db.update_match_status(dispute["match_id"], "voided")
         for pid in [match["player1_id"], match["player2_id"]]:
             db.update_player_balance(
                 pid, ENTRY_FEE_USD,
@@ -349,34 +307,49 @@ async def resolve_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 await update.get_bot().send_message(
                     pid,
-                    f"⚖️ Partida #{match['id']} anulada.\n"
-                    f"Reembolso: {fmt_usd(ENTRY_FEE_USD)}.",
+                    f"⚖️ *Disputa resuelta — Partida #{match['id']} anulada*\n\n"
+                    f"El administrador decidió anular la partida.\n"
+                    f"💰 Reembolso: *{fmt_usd(ENTRY_FEE_USD)}* a tu balance.",
                     parse_mode="Markdown",
                     reply_markup=kb_main_menu()
                 )
             except Exception:
                 pass
-        db.resolve_dispute(dispute_id, None, "Anulada — reembolso a ambos")
-        await update.callback_query.edit_message_text(
-            "❌ Partida anulada. Reembolsos enviados.",
-            reply_markup=kb_back_to_admin()
-        )
+        db.resolve_dispute(dispute_id, None, "Anulada por el admin — reembolso a ambos")
+        try:
+            await update.callback_query.edit_message_text(
+                "❌ *Partida anulada.* Reembolsos enviados a ambos jugadores.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await update.callback_query.answer("✅ Partida anulada", show_alert=True)
+
     else:
+        # Dar victoria a J1 o J2
         winner_id = winner_raw
         loser_id  = (match["player2_id"] if match["player1_id"] == winner_id
                      else match["player1_id"])
+        winner    = db.get_player(winner_id)
+
         from handlers.competition import _finalize_match_auto
         await _finalize_match_auto(
-            update.get_bot(), dispute["match_id"],
-            winner_id, loser_id, match["game_mode"]
+            update.get_bot(),
+            dispute["match_id"], winner_id, loser_id, match["game_mode"]
         )
-        winner = db.get_player(winner_id)
-        db.resolve_dispute(dispute_id, winner_id, f"Victoria a {winner['cr_name']}")
-        await update.callback_query.edit_message_text(
-            f"✅ Victoria otorgada a *{winner['cr_name']}*",
-            parse_mode="Markdown",
-            reply_markup=kb_back_to_admin()
+        db.resolve_dispute(
+            dispute_id, winner_id,
+            f"Admin otorgó victoria a {winner['cr_name']}"
         )
+        try:
+            await update.callback_query.edit_message_text(
+                f"✅ *Victoria otorgada a {winner['cr_name']}*\n"
+                f"Partida #{match['id']} resuelta.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await update.callback_query.answer(
+                f"✅ Victoria a {winner['cr_name']}", show_alert=True
+            )
 
 
 # ── Cola ──────────────────────────────────────────────────────────────────────
@@ -698,7 +671,8 @@ async def tourn_fee(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             update.message.text.strip().replace(",", ".")
         )
     except ValueError:
-        await update.message.reply_text("⚠️ Inválido. Ej: `2.00`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Inválido. Ej: `2.00`",
+                                         parse_mode="Markdown")
         return TOURN_FEE
     await update.message.reply_text(
         "🏆 *4/4 — Premio al ganador (USD):*\nEj: `15.00`",
@@ -718,15 +692,13 @@ async def tourn_prize(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("⚠️ Inválido.")
         return TOURN_PRIZE
-
     ud = ctx.user_data
     await update.message.reply_text(
         f"📋 *Confirmar torneo*\n\n"
         f"🏆 *{ud['tourn_name']}*\n"
         f"🎮 {mode_label(ud['tourn_mode'])}\n"
-        f"💳 Inscripción: {fmt_usd(ud['tourn_fee'])}\n"
-        f"🥇 Premio: {fmt_usd(ud['tourn_prize'])}\n\n"
-        f"¿Confirmas?",
+        f"💳 {fmt_usd(ud['tourn_fee'])}\n"
+        f"🥇 {fmt_usd(ud['tourn_prize'])}\n\n¿Confirmas?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Crear",    callback_data="tourn_ok"),
@@ -744,7 +716,6 @@ async def tourn_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "❌ Torneo cancelado.", reply_markup=kb_admin_main()
         )
         return ConversationHandler.END
-
     ud   = ctx.user_data
     t_id = db.create_tournament(
         ud["tourn_name"], ud["tourn_mode"],
@@ -756,35 +727,30 @@ async def tourn_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     try:
         await update.get_bot().send_message(
-            chat_id           = GROUP_ID,
-            message_thread_id = TOPIC_ANNOUNCEMENTS_ID,
-            text              = (
+            chat_id=GROUP_ID, message_thread_id=TOPIC_ANNOUNCEMENTS_ID,
+            text=(
                 f"🏆 *¡Nuevo torneo ArenaX!*\n\n"
                 f"📛 *{ud['tourn_name']}*\n"
                 f"🎮 {mode_label(ud['tourn_mode'])}\n"
-                f"💳 Inscripción: {fmt_usd(ud['tourn_fee'])}\n"
-                f"🥇 Premio: {fmt_usd(ud['tourn_prize'])}\n\n"
-                f"¡Prepárate! 🔥"
+                f"💳 {fmt_usd(ud['tourn_fee'])}\n"
+                f"🥇 {fmt_usd(ud['tourn_prize'])}\n\n¡Prepárate! 🔥"
             ),
             parse_mode="Markdown"
         )
     except Exception as e:
         logger.warning(f"No se pudo anunciar torneo: {e}")
-
     ctx.user_data.clear()
     return ConversationHandler.END
 
 
-# ── Broadcast — SOLO al tema Anuncios ─────────────────────────────────────────
+# ── Broadcast ─────────────────────────────────────────────────────────────────
 
 @admin_only
 async def broadcast_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     ctx.user_data.clear()
     await update.callback_query.edit_message_text(
-        "📢 *Broadcast al grupo oficial*\n\n"
-        "El mensaje se publicará en el tema *Anuncios*.\n\n"
-        "Escribe el mensaje:",
+        "📢 *Broadcast al grupo oficial*\n\nEscribe el mensaje:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Cancelar", callback_data="admin_back")]
@@ -796,12 +762,9 @@ async def broadcast_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def broadcast_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["broadcast_text"] = update.message.text
     await update.message.reply_text(
-        f"¿Confirmas publicar en el grupo?\n\n"
-        f"─────\n{update.message.text[:300]}\n─────",
-        reply_markup=kb_confirm(
-            "broadcast_yes", "broadcast_no",
-            "📢 Publicar", "❌ Cancelar"
-        )
+        f"¿Confirmas publicar?\n\n─────\n{update.message.text[:300]}\n─────",
+        reply_markup=kb_confirm("broadcast_yes", "broadcast_no",
+                                "📢 Publicar", "❌ Cancelar")
     )
     return BROADCAST_OK
 
@@ -814,25 +777,20 @@ async def broadcast_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "❌ Broadcast cancelado.", reply_markup=kb_admin_main()
         )
         return ConversationHandler.END
-
     msg = ctx.user_data.get("broadcast_text", "")
     try:
         await update.get_bot().send_message(
-            chat_id           = GROUP_ID,
-            message_thread_id = TOPIC_ANNOUNCEMENTS_ID,
-            text              = f"📢 *Anuncio ArenaX:*\n\n{msg}",
-            parse_mode        = "Markdown"
+            chat_id=GROUP_ID, message_thread_id=TOPIC_ANNOUNCEMENTS_ID,
+            text=f"📢 *Anuncio ArenaX:*\n\n{msg}", parse_mode="Markdown"
         )
         await update.callback_query.edit_message_text(
-            "✅ *Anuncio publicado* en el tema Anuncios.",
+            "✅ *Anuncio publicado.*",
             parse_mode="Markdown", reply_markup=kb_admin_main()
         )
     except Exception as e:
         await update.callback_query.edit_message_text(
-            f"❌ Error: `{e}`",
-            parse_mode="Markdown", reply_markup=kb_admin_main()
+            f"❌ Error: `{e}`", parse_mode="Markdown", reply_markup=kb_admin_main()
         )
-
     ctx.user_data.clear()
     return ConversationHandler.END
 
@@ -847,15 +805,11 @@ async def edit_texts_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📝 *Editar textos* — ¿Qué deseas editar?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("👋 Bienvenida",
-                                  callback_data="text_welcome")],
-            [InlineKeyboardButton("📋 Términos y condiciones",
-                                  callback_data="text_terms")],
-            [InlineKeyboardButton("💳 Instrucciones de pago",
-                                  callback_data="text_payment_instructions")],
-            [InlineKeyboardButton("⚔️ Reglas de partida",
-                                  callback_data="text_match_rules")],
-            [InlineKeyboardButton("🔙 Volver", callback_data="admin_back")],
+            [InlineKeyboardButton("👋 Bienvenida",             callback_data="text_welcome")],
+            [InlineKeyboardButton("📋 Términos y condiciones", callback_data="text_terms")],
+            [InlineKeyboardButton("💳 Instrucciones de pago",  callback_data="text_payment_instructions")],
+            [InlineKeyboardButton("⚔️ Reglas de partida",      callback_data="text_match_rules")],
+            [InlineKeyboardButton("🔙 Volver",                 callback_data="admin_back")],
         ])
     )
     return EDIT_TEXT_SELECT
@@ -867,8 +821,7 @@ async def edit_text_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["edit_text_key"] = key
     current = db.get_text(key)
     await update.callback_query.edit_message_text(
-        f"📝 Texto actual:\n\n`{current[:400]}`\n\n"
-        "Envía el nuevo texto:",
+        f"📝 Texto actual:\n\n`{current[:400]}`\n\nEnvía el nuevo texto:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Volver", callback_data="admin_edit_texts")]
@@ -888,7 +841,7 @@ async def edit_text_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ── Límite victorias — ConversationHandler propio (fix broadcast) ─────────────
+# ── Límite victorias ──────────────────────────────────────────────────────────
 
 @admin_only
 async def admin_win_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -905,27 +858,24 @@ async def admin_win_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def save_win_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Guarda el límite con validación 1-20."""
     try:
         value = int(update.message.text.strip())
     except ValueError:
         await update.message.reply_text(
-            "⚠️ Ingresa un número entero. Ej: `10`",
-            parse_mode="Markdown"
+            "⚠️ Ingresa un número entero. Ej: `10`", parse_mode="Markdown"
         )
         return WIN_LIMIT_INPUT
 
     if value < 1 or value > 20:
         await update.message.reply_text(
-            f"⚠️ El límite debe estar entre *1 y 20*.\n"
-            f"Enviaste: {value}",
+            f"⚠️ El límite debe estar entre *1 y 20*. Enviaste: {value}",
             parse_mode="Markdown"
         )
         return WIN_LIMIT_INPUT
 
     db.set_setting("win_limit_day", str(value))
     await update.message.reply_text(
-        f"✅ Límite de victorias actualizado a *{value}* por día.",
+        f"✅ Límite actualizado a *{value}* victorias por día.",
         parse_mode="Markdown",
         reply_markup=kb_admin_main()
     )
@@ -942,8 +892,7 @@ async def admin_sync_sheets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if result["ok"]:
         await update.callback_query.edit_message_text(
             f"✅ *Sync completado*\n"
-            f"👥 {result['players']} jugadores | "
-            f"⚔️ {result['matches']} partidas",
+            f"👥 {result['players']} jugadores | ⚔️ {result['matches']} partidas",
             parse_mode="Markdown", reply_markup=kb_admin_main()
         )
     else:
@@ -958,8 +907,6 @@ async def cmd_sync_sheets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Sincronizando...")
     r = services.sync_to_sheets()
     if r["ok"]:
-        await msg.edit_text(
-            f"✅ {r['players']} jugadores, {r['matches']} partidas."
-        )
+        await msg.edit_text(f"✅ {r['players']} jugadores, {r['matches']} partidas.")
     else:
-        await msg.edit_text(f"❌ {r.get('error', 'error desconocido')}")
+        await msg.edit_text(f"❌ {r.get('error', 'error')}")

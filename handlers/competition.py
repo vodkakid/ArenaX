@@ -1,10 +1,13 @@
 """
-Competencia v6.1 — Correcciones críticas:
-- Link amistad como botón URL que abre CR directamente
-- Timeout funciona correctamente (application pasado como parámetro)
-- Botón "salir cola" desaparece al emparejar
-- Capture de disputa completamente separado del flow de pago
-- Verificación de límite de victorias al competir
+Competencia v6.2 — Flujo de disputa simplificado:
+
+Casos de resultado:
+  - J1 gana + J2 pierde → automático ✅
+  - J1 pierde + J2 gana → automático ✅
+  - Ambos dicen "yo perdí" → anulación automática + reembolso
+  - Ambos dicen "yo gané" → disputa: ambos envían capture,
+    admin ve los dos juntos y decide [Gana J1] [Gana J2] [Anular]
+    (sin aprobar/rechazar captures individuales)
 """
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,7 +16,7 @@ import database as db
 import services
 from utils import (
     kb_game_modes, kb_main_menu, kb_in_queue, kb_compete_again,
-    kb_match_result, kb_result_review, kb_dispute_resolve,
+    kb_match_result, kb_dispute_resolve,
     kb_confirm, kb_back_to_menu, is_business_hours,
     fmt_usd, fmt_ves, mode_label,
 )
@@ -29,7 +32,7 @@ SELECT_MODE           = 0
 WAITING_PAYMENT       = 1
 WAITING_RESULT_PROOF  = 10
 DISPUTE_REASON        = 11
-WAITING_DISPUTE_PROOF = 12  # ← Estado separado para capturas de disputa
+WAITING_DISPUTE_PROOF = 12
 
 
 # ── Canal admin ───────────────────────────────────────────────────────────────
@@ -76,7 +79,7 @@ async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not player or player["status"] != "active":
         await update.callback_query.edit_message_text(
-            "⚠️ Tu cuenta no está activa. Contacta al administrador.",
+            "⚠️ Tu cuenta no está activa.",
             reply_markup=kb_back_to_menu()
         )
         return ConversationHandler.END
@@ -89,7 +92,7 @@ async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # ── Verificar límite de victorias del día ─────────────────────────────────
+    # Verificar límite diario
     try:
         win_limit = int(db.get_setting("win_limit_day") or "10")
     except Exception:
@@ -99,7 +102,7 @@ async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(
             f"🚫 *Límite diario alcanzado*\n\n"
             f"Llevas *{player['wins_today']} victorias* hoy.\n"
-            f"El límite es de *{win_limit} victorias* por día.\n\n"
+            f"El límite es *{win_limit}* por día.\n\n"
             f"¡Vuelve mañana! 🏆",
             parse_mode="Markdown",
             reply_markup=kb_back_to_menu()
@@ -187,7 +190,6 @@ async def select_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Recibe capture de PAGO — solo si estamos en estado WAITING_PAYMENT."""
     user    = update.effective_user
     file_id = update.message.photo[-1].file_id
     mode    = ctx.user_data.get("game_mode", "1v1")
@@ -279,7 +281,6 @@ async def leave_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     user = update.effective_user
 
-    # Verificar que sigue en cola (no emparejado)
     if not db.is_in_queue(user.id):
         await update.callback_query.edit_message_text(
             "ℹ️ Ya no estás en la cola.",
@@ -305,9 +306,6 @@ async def leave_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── Matchmaking ───────────────────────────────────────────────────────────────
 
 async def try_match(bot, telegram_id, game_mode, payment_id, application=None):
-    """
-    application debe pasarse para que los jobs de timeout funcionen.
-    """
     opponent = db.find_match_in_queue(game_mode, telegram_id)
 
     if not opponent:
@@ -332,18 +330,16 @@ async def try_match(bot, telegram_id, game_mode, payment_id, application=None):
     match_id = db.create_match(telegram_id, opponent["telegram_id"], game_mode)
     rules    = db.get_text("match_rules")
 
-    # ── Botones: link amistad como URL + resultado ────────────────────────────
-    def kb_match(oponent_link: str, mid: int):
+    def kb_match(link, mid):
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "👤 Agregar amigo en Clash Royale",
-                url=oponent_link
+                "👤 Agregar amigo en Clash Royale", url=link
             )],
             [InlineKeyboardButton("🏆 Yo gané",  callback_data=f"result_win_{mid}"),
              InlineKeyboardButton("😞 Yo perdí", callback_data=f"result_lose_{mid}")],
         ])
 
-    msg_base = (
+    msg = (
         f"🔥 *¡Partida #{match_id} encontrada!*\n\n"
         f"🎮 Modo: {mode_label(game_mode)}\n"
         f"🏆 Premio: *{fmt_usd(WIN_PRIZE_USD)}* netos si ganas\n\n"
@@ -352,22 +348,19 @@ async def try_match(bot, telegram_id, game_mode, payment_id, application=None):
         f"⏰ Tienes *{RESULT_TIMEOUT_MIN} minutos* para reportar."
     )
 
-    # Enviar a J1 — el botón del link abre el perfil de J2
     await bot.send_message(
         chat_id      = telegram_id,
-        text         = msg_base.format(oponente=p2["cr_name"]),
+        text         = msg.format(oponente=p2["cr_name"]),
         parse_mode   = "Markdown",
         reply_markup = kb_match(p2["friend_link"], match_id)
     )
-    # Enviar a J2 — el botón del link abre el perfil de J1
     await bot.send_message(
         chat_id      = opponent["telegram_id"],
-        text         = msg_base.format(oponente=p1["cr_name"]),
+        text         = msg.format(oponente=p1["cr_name"]),
         parse_mode   = "Markdown",
         reply_markup = kb_match(p1["friend_link"], match_id)
     )
 
-    # Publicar en grupo
     try:
         await bot.send_message(
             chat_id           = GROUP_ID,
@@ -382,28 +375,23 @@ async def try_match(bot, telegram_id, game_mode, payment_id, application=None):
     except Exception as e:
         logger.warning(f"No se pudo publicar en grupo: {e}")
 
-    # ── Jobs de timeout — requiere application ────────────────────────────────
     if application:
         job_data = {
-            "match_id": match_id,
-            "p1_id":    telegram_id,
-            "p2_id":    opponent["telegram_id"],
+            "match_id":  match_id,
+            "p1_id":     telegram_id,
+            "p2_id":     opponent["telegram_id"],
             "game_mode": game_mode,
         }
         application.job_queue.run_once(
-            _reminder_job,
-            RESULT_REMINDER_MIN * 60,
-            data=job_data,
-            name=f"reminder_{match_id}"
+            _reminder_job, RESULT_REMINDER_MIN * 60,
+            data=job_data, name=f"reminder_{match_id}"
         )
         application.job_queue.run_once(
-            _timeout_job,
-            RESULT_TIMEOUT_MIN * 60,
-            data=job_data,
-            name=f"timeout_{match_id}"
+            _timeout_job, RESULT_TIMEOUT_MIN * 60,
+            data=job_data, name=f"timeout_{match_id}"
         )
     else:
-        logger.warning(f"try_match llamado sin application — timeout desactivado para partida #{match_id}")
+        logger.warning(f"try_match sin application — timeout desactivado para #{match_id}")
 
 
 # ── Jobs de timeout ───────────────────────────────────────────────────────────
@@ -414,14 +402,13 @@ async def _reminder_job(context):
     match    = db.get_match(match_id)
     if not match or match["status"] != "active":
         return
-
     for pid in [data["p1_id"], data["p2_id"]]:
         if db.get_match_report(match_id, pid) is None:
             try:
                 await context.bot.send_message(
                     pid,
                     f"⏰ *Recordatorio — Partida #{match_id}*\n\n"
-                    f"Te quedan *{RESULT_TIMEOUT_MIN - RESULT_REMINDER_MIN} minutos* "
+                    f"Te quedan *{RESULT_TIMEOUT_MIN - RESULT_REMINDER_MIN} minuto(s)* "
                     f"para reportar el resultado.",
                     parse_mode="Markdown",
                     reply_markup=kb_match_result(match_id)
@@ -443,7 +430,7 @@ async def _timeout_job(context):
     r2    = db.get_match_report(match_id, p2_id)
 
     if r1 is None and r2 is None:
-        # Nadie reportó → reembolso
+        # Nadie reportó → reembolso a ambos
         db.update_match_status(match_id, "voided")
         for pid in [p1_id, p2_id]:
             db.update_player_balance(
@@ -463,7 +450,7 @@ async def _timeout_job(context):
                 logger.error(f"Error reembolso timeout: {e}")
         return
 
-    # Uno reportó, el otro no
+    # Uno reportó, el otro no → gana quien reportó
     if r1 is not None and r2 is None:
         reporter_id, no_reporter_id = p1_id, p2_id
         outcome = r1["outcome"]
@@ -471,7 +458,7 @@ async def _timeout_job(context):
         reporter_id, no_reporter_id = p2_id, p1_id
         outcome = r2["outcome"]
     else:
-        return  # ambos ya reportaron, el handle_result lo resolvió
+        return
 
     winner_id = reporter_id if outcome == "win" else no_reporter_id
     loser_id  = no_reporter_id if outcome == "win" else reporter_id
@@ -501,14 +488,14 @@ def _cancel_match_jobs(application, match_id):
         logger.warning(f"No se pudo cancelar job: {e}")
 
 
-# ── Sistema "Yo gané / Yo perdí" ─────────────────────────────────────────────
+# ── Sistema "Yo gané / Yo perdí" — lógica completa ───────────────────────────
 
 async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     data     = update.callback_query.data
     user     = update.effective_user
     parts    = data.split("_")
-    outcome  = parts[1]
+    outcome  = parts[1]   # "win" o "lose"
     match_id = int(parts[2])
 
     match = db.get_match(match_id)
@@ -533,33 +520,210 @@ async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     other_report = db.get_match_report(match_id, other_id)
 
     if other_report is None:
+        # El oponente aún no reporta — esperar
         await update.callback_query.edit_message_text(
             f"✅ Reportaste: *{'🏆 Victoria' if outcome == 'win' else '😞 Derrota'}*\n\n"
             f"Esperando que tu oponente reporte...\n"
-            f"⏰ Límite: {RESULT_TIMEOUT_MIN} min desde el inicio de la partida.",
+            f"⏰ Límite: {RESULT_TIMEOUT_MIN} min desde el inicio.",
             parse_mode="Markdown"
         )
         return
 
+    # ── Ambos reportaron — analizar combinación ───────────────────────────────
     other_outcome = other_report["outcome"]
+    _cancel_match_jobs(ctx.application, match_id)
 
+    # Caso 1: Coincidencia correcta → resultado automático
     if (outcome == "win" and other_outcome == "lose") or \
        (outcome == "lose" and other_outcome == "win"):
         winner_id = user.id if outcome == "win" else other_id
         loser_id  = other_id if outcome == "win" else user.id
-        _cancel_match_jobs(ctx.application, match_id)
         await _finalize_match_auto(
             update.get_bot(), match_id, winner_id, loser_id, match["game_mode"]
         )
         return
 
-    # Conflicto
-    _cancel_match_jobs(ctx.application, match_id)
-    await _open_conflict_dispute(
-        update.get_bot(), match_id, match,
-        user.id, other_id, outcome, other_outcome
+    # Caso 2: Ambos perdieron → anulación automática con reembolso
+    if outcome == "lose" and other_outcome == "lose":
+        db.update_match_status(match_id, "voided")
+        for pid in [user.id, other_id]:
+            db.update_player_balance(
+                pid, ENTRY_FEE_USD,
+                f"Reembolso partida #{match_id} — ambos reportaron derrota",
+                "refund"
+            )
+            try:
+                await update.get_bot().send_message(
+                    pid,
+                    f"🤝 *Partida #{match_id} — Empate*\n\n"
+                    f"Ambos reportaron derrota.\n"
+                    f"💰 Se reembolsó *{fmt_usd(ENTRY_FEE_USD)}* a tu balance.\n\n"
+                    f"¡Vuelve a intentarlo!",
+                    parse_mode="Markdown",
+                    reply_markup=kb_compete_again()
+                )
+            except Exception as e:
+                logger.error(f"Error reembolso ambos-perdieron: {e}")
+        return
+
+    # Caso 3: Ambos ganaron → disputa
+    # (el único caso restante es win+win)
+    await _open_dispute_both_won(
+        update.get_bot(), ctx.application,
+        match_id, match, user.id, other_id
     )
 
+
+async def _open_dispute_both_won(bot, application, match_id, match, p_id, other_id):
+    """
+    Ambos dicen que ganaron.
+    Pedimos capture a cada uno. Cuando ambos envíen,
+    el admin ve los dos juntos y decide directamente.
+    """
+    reason     = "Ambos jugadores reportaron victoria"
+    dispute_id = db.create_dispute(match_id, p_id, reason)
+
+    # Guardar el dispute_id en la BD para referencia
+    # (usamos el campo reason para identificarlo)
+
+    for pid in [p_id, other_id]:
+        try:
+            await bot.send_message(
+                pid,
+                f"⚠️ *Conflicto — Partida #{match_id}*\n\n"
+                f"Ambos reportaron victoria. 🤔\n\n"
+                f"📸 Envía el capture de tu pantalla de victoria "
+                f"para que el administrador pueda decidir:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "📸 Enviar mi capture",
+                        callback_data=f"submit_dispute_proof_{match_id}"
+                    )
+                ]])
+            )
+        except Exception as e:
+            logger.error(f"Error notificando disputa: {e}")
+
+    p1 = db.get_player(match["player1_id"])
+    p2 = db.get_player(match["player2_id"])
+    await notify_admin(
+        bot,
+        f"⚖️ *Disputa #{dispute_id} — Partida #{match_id}*\n\n"
+        f"🎮 {mode_label(match['game_mode'])}\n"
+        f"👤 {p1['cr_name']} vs {p2['cr_name']}\n\n"
+        f"⚠️ Ambos reportaron victoria.\n"
+        f"Esperando captures de ambos jugadores...",
+        reply_markup=kb_dispute_resolve(
+            dispute_id, match["player1_id"], match["player2_id"]
+        )
+    )
+
+
+# ── Capture de disputa ────────────────────────────────────────────────────────
+
+async def start_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    raw = update.callback_query.data.replace("submit_dispute_proof_", "")
+    try:
+        match_id = int(raw)
+    except ValueError:
+        await update.callback_query.answer("Error.", show_alert=True)
+        return ConversationHandler.END
+
+    ctx.user_data["dispute_proof_match_id"] = match_id
+    await update.callback_query.message.reply_text(
+        f"📸 Envía tu capture de resultado de la *Partida #{match_id}*:",
+        parse_mode="Markdown"
+    )
+    return WAITING_DISPUTE_PROOF
+
+
+async def receive_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Recibe capture de disputa.
+    Cuando ambos jugadores hayan enviado, notifica al admin
+    con los DOS captures juntos y los botones de decisión.
+    """
+    user     = update.effective_user
+    file_id  = update.message.photo[-1].file_id
+    match_id = ctx.user_data.get("dispute_proof_match_id")
+    match    = db.get_match(match_id) if match_id else None
+    player   = db.get_player(user.id)
+
+    if not match:
+        await update.message.reply_text("⚠️ No se encontró la partida.")
+        return ConversationHandler.END
+
+    # Guardar capture
+    db.set_match_result_proof(match_id, user.id, file_id)
+
+    await update.message.reply_text(
+        "✅ Capture recibido. El administrador lo revisará junto con el de tu oponente.",
+        reply_markup=kb_main_menu()
+    )
+
+    # Verificar si el oponente ya envió su capture
+    other_id = (match["player2_id"] if match["player1_id"] == user.id
+                else match["player1_id"])
+    other_player = db.get_player(other_id)
+
+    # Refrescar datos del match
+    match = db.get_match(match_id)
+    p1_proof = match["result_proof_p1"]
+    p2_proof = match["result_proof_p2"]
+
+    # Obtener el dispute_id
+    disputes = db.get_open_disputes()
+    dispute  = next((d for d in disputes if d["match_id"] == match_id), None)
+    dispute_id = dispute["id"] if dispute else 0
+
+    if p1_proof and p2_proof:
+        # Ambos enviaron → notificar al admin con los dos captures y botones
+        p1 = db.get_player(match["player1_id"])
+        p2 = db.get_player(match["player2_id"])
+
+        await notify_admin(
+            update.get_bot(),
+            f"⚖️ *Disputa #{dispute_id} — Partida #{match_id}*\n\n"
+            f"🎮 {mode_label(match['game_mode'])}\n"
+            f"👤 {p1['cr_name']} vs {p2['cr_name']}\n\n"
+            f"✅ Ambos jugadores enviaron su capture.\n"
+            f"👇 Revisa los captures abajo y decide el ganador:"
+        )
+        # Enviar capture de J1
+        await notify_admin(
+            update.get_bot(),
+            f"📸 *Capture de {p1['cr_name']}* (Jugador 1)",
+            photo=p1_proof
+        )
+        # Enviar capture de J2 con los botones de decisión
+        await notify_admin(
+            update.get_bot(),
+            f"📸 *Capture de {p2['cr_name']}* (Jugador 2)\n\n"
+            f"¿Quién ganó la Partida #{match_id}?",
+            photo=p2_proof,
+            reply_markup=kb_dispute_resolve(
+                dispute_id, match["player1_id"], match["player2_id"]
+            )
+        )
+    else:
+        # Solo uno envió — notificar quién falta
+        who_sent = player["cr_name"]
+        who_left = other_player["cr_name"]
+        await notify_admin(
+            update.get_bot(),
+            f"📸 *Capture recibido — Partida #{match_id}*\n\n"
+            f"✅ {who_sent} envió su capture.\n"
+            f"⏳ Esperando capture de *{who_left}*...",
+            photo=file_id
+        )
+
+    ctx.user_data.pop("dispute_proof_match_id", None)
+    return ConversationHandler.END
+
+
+# ── Finalizar partida ─────────────────────────────────────────────────────────
 
 async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
     db.finalize_match(match_id, winner_id)
@@ -605,103 +769,7 @@ async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
         logger.warning(f"No se pudo publicar resultado: {e}")
 
 
-async def _open_conflict_dispute(bot, match_id, match, p_id, other_id,
-                                   p_outcome, other_outcome):
-    reason     = (f"Conflicto: J1 reportó '{p_outcome}', "
-                  f"J2 reportó '{other_outcome}'")
-    dispute_id = db.create_dispute(match_id, p_id, reason)
-
-    for pid in [p_id, other_id]:
-        try:
-            # Marcar en user_data que están esperando capture de disputa
-            # Se hace vía callback especial
-            await bot.send_message(
-                pid,
-                f"⚠️ *Disputa automática — Partida #{match_id}*\n\n"
-                f"Los reportes no coinciden.\n"
-                f"📸 Envía tu capture de la pantalla de resultado:",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "📸 Enviar mi capture",
-                        callback_data=f"submit_dispute_proof_{match_id}"
-                    )
-                ]])
-            )
-        except Exception as e:
-            logger.error(f"Error notificando disputa: {e}")
-
-    p1 = db.get_player(match["player1_id"])
-    p2 = db.get_player(match["player2_id"])
-    await notify_admin(
-        bot,
-        f"⚖️ *Disputa automática #{dispute_id}*\n\n"
-        f"Partida #{match_id} | {mode_label(match['game_mode'])}\n"
-        f"👤 {p1['cr_name']} vs {p2['cr_name']}\n\n"
-        f"Motivo: {reason}",
-        reply_markup=kb_dispute_resolve(
-            dispute_id, match["player1_id"], match["player2_id"]
-        )
-    )
-
-
-# ── Capture de disputa — COMPLETAMENTE SEPARADO del flow de pago ──────────────
-
-async def start_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """El jugador presiona 'Enviar mi capture' en una disputa."""
-    await update.callback_query.answer()
-    raw = update.callback_query.data.replace("submit_dispute_proof_", "")
-    try:
-        match_id = int(raw)
-    except ValueError:
-        await update.callback_query.answer("Error.", show_alert=True)
-        return ConversationHandler.END
-
-    ctx.user_data["dispute_proof_match_id"] = match_id
-    await update.callback_query.message.reply_text(
-        f"📸 Envía el capture de la *Partida #{match_id}*\n"
-        f"_(pantalla de resultado dentro de Clash Royale)_",
-        parse_mode="Markdown"
-    )
-    return WAITING_DISPUTE_PROOF
-
-
-async def receive_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Recibe el capture de una DISPUTA.
-    Completamente separado del receive_payment_proof.
-    """
-    user     = update.effective_user
-    file_id  = update.message.photo[-1].file_id
-    match_id = ctx.user_data.get("dispute_proof_match_id")
-    match    = db.get_match(match_id) if match_id else None
-    player   = db.get_player(user.id)
-
-    if not match:
-        await update.message.reply_text("⚠️ No se encontró la partida de la disputa.")
-        return ConversationHandler.END
-
-    db.set_match_result_proof(match_id, user.id, file_id)
-    await update.message.reply_text(
-        "✅ Capture de disputa recibido.\n"
-        "El administrador lo revisará y decidirá el resultado.",
-        reply_markup=kb_main_menu()
-    )
-
-    from utils import kb_result_review
-    await notify_admin(
-        update.get_bot(),
-        f"⚖️ *Capture de disputa — Partida #{match_id}*\n"
-        f"👤 *{player['cr_name']}*\n"
-        f"🎮 {mode_label(match['game_mode'])}",
-        reply_markup=kb_result_review(match_id, user.id),
-        photo=file_id
-    )
-    ctx.user_data.pop("dispute_proof_match_id", None)
-    return ConversationHandler.END
-
-
-# ── Disputa manual ────────────────────────────────────────────────────────────
+# ── Disputa manual (abierta por el jugador) ───────────────────────────────────
 
 async def open_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
