@@ -1,14 +1,13 @@
 """
-Competencia v6:
-- Timeout 5 min para reportar resultado
-- Recordatorio a los 3 min
-- Timeout: gana quien reportó / anulación si nadie reportó
-- Pago con saldo o pago móvil
-- Sistema Yo gané / Yo perdí con coincidencia automática
+Competencia v6.1 — Correcciones críticas:
+- Link amistad como botón URL que abre CR directamente
+- Timeout funciona correctamente (application pasado como parámetro)
+- Botón "salir cola" desaparece al emparejar
+- Capture de disputa completamente separado del flow de pago
+- Verificación de límite de victorias al competir
 """
 import logging
-from datetime import datetime
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 import database as db
 import services
@@ -26,13 +25,14 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-SELECT_MODE          = 0
-WAITING_PAYMENT      = 1
-WAITING_RESULT_PROOF = 10
-DISPUTE_REASON       = 11
+SELECT_MODE           = 0
+WAITING_PAYMENT       = 1
+WAITING_RESULT_PROOF  = 10
+DISPUTE_REASON        = 11
+WAITING_DISPUTE_PROOF = 12  # ← Estado separado para capturas de disputa
 
 
-# ── Notificar al canal admin ──────────────────────────────────────────────────
+# ── Canal admin ───────────────────────────────────────────────────────────────
 
 async def notify_admin(bot, text, reply_markup=None, photo=None):
     target = ADMIN_CHANNEL_ID if ADMIN_CHANNEL_ID != 0 else ADMIN_IDS[0]
@@ -69,7 +69,6 @@ async def notify_admin(bot, text, reply_markup=None, photo=None):
 
 async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    # IMPORTANTE: limpiar estado previo para evitar conflictos
     ctx.user_data.clear()
 
     user   = update.effective_user
@@ -84,8 +83,24 @@ async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not is_business_hours():
         await update.callback_query.edit_message_text(
-            "🕙 ArenaX opera de *10:00 am a 10:00 pm* (hora Venezuela).\n"
-            "¡Vuelve en horario comercial!",
+            "🕙 ArenaX opera de *10:00 am a 10:00 pm* (hora Venezuela).",
+            parse_mode="Markdown",
+            reply_markup=kb_back_to_menu()
+        )
+        return ConversationHandler.END
+
+    # ── Verificar límite de victorias del día ─────────────────────────────────
+    try:
+        win_limit = int(db.get_setting("win_limit_day") or "10")
+    except Exception:
+        win_limit = 10
+
+    if player["wins_today"] >= win_limit:
+        await update.callback_query.edit_message_text(
+            f"🚫 *Límite diario alcanzado*\n\n"
+            f"Llevas *{player['wins_today']} victorias* hoy.\n"
+            f"El límite es de *{win_limit} victorias* por día.\n\n"
+            f"¡Vuelve mañana! 🏆",
             parse_mode="Markdown",
             reply_markup=kb_back_to_menu()
         )
@@ -93,8 +108,7 @@ async def start_compete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if db.is_in_queue(user.id):
         await update.callback_query.edit_message_text(
-            "⏳ Ya estás en la cola esperando rival.\n"
-            "Serás notificado cuando se encuentre uno.",
+            "⏳ Ya estás en la cola esperando rival.",
             reply_markup=kb_in_queue()
         )
         return ConversationHandler.END
@@ -127,12 +141,10 @@ async def select_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["game_mode"] = mode
     player  = db.get_player(update.effective_user.id)
     balance = player["balance_usd"]
-
-    rate = await services.get_bcv_rate()
+    rate    = await services.get_bcv_rate()
     ctx.user_data["bcv_rate"] = rate
 
     if balance >= ENTRY_FEE_USD:
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         await update.callback_query.edit_message_text(
             f"*Modo: {mode_label(mode)}*\n\n"
             f"💰 Tienes *{fmt_usd(balance)}* en tu balance.\n"
@@ -175,6 +187,7 @@ async def select_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Recibe capture de PAGO — solo si estamos en estado WAITING_PAYMENT."""
     user    = update.effective_user
     file_id = update.message.photo[-1].file_id
     mode    = ctx.user_data.get("game_mode", "1v1")
@@ -191,6 +204,7 @@ async def receive_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb_main_menu()
     )
 
+    from utils import kb_payment_review
     await notify_admin(
         update.get_bot(),
         f"💳 *Pago pendiente #{pay_id}*\n"
@@ -202,11 +216,6 @@ async def receive_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     ctx.user_data.clear()
     return ConversationHandler.END
-
-
-def kb_payment_review(payment_id):
-    from utils import kb_payment_review as _kb
-    return _kb(payment_id)
 
 
 async def pay_from_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -235,7 +244,10 @@ async def pay_from_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
     ctx.user_data.clear()
-    await try_match(update.get_bot(), user.id, mode, pay_id)
+    await try_match(
+        update.get_bot(), user.id, mode, pay_id,
+        application=ctx.application
+    )
     return ConversationHandler.END
 
 
@@ -266,12 +278,15 @@ async def pay_mobile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def leave_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     user = update.effective_user
+
+    # Verificar que sigue en cola (no emparejado)
     if not db.is_in_queue(user.id):
         await update.callback_query.edit_message_text(
             "ℹ️ Ya no estás en la cola.",
             reply_markup=kb_main_menu()
         )
         return
+
     db.remove_from_queue(user.id)
     db.update_player_balance(
         user.id, ENTRY_FEE_USD,
@@ -289,7 +304,10 @@ async def leave_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Matchmaking ───────────────────────────────────────────────────────────────
 
-async def try_match(bot, telegram_id, game_mode, payment_id):
+async def try_match(bot, telegram_id, game_mode, payment_id, application=None):
+    """
+    application debe pasarse para que los jobs de timeout funcionen.
+    """
     opponent = db.find_match_in_queue(game_mode, telegram_id)
 
     if not opponent:
@@ -314,33 +332,39 @@ async def try_match(bot, telegram_id, game_mode, payment_id):
     match_id = db.create_match(telegram_id, opponent["telegram_id"], game_mode)
     rules    = db.get_text("match_rules")
 
+    # ── Botones: link amistad como URL + resultado ────────────────────────────
+    def kb_match(oponent_link: str, mid: int):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "👤 Agregar amigo en Clash Royale",
+                url=oponent_link
+            )],
+            [InlineKeyboardButton("🏆 Yo gané",  callback_data=f"result_win_{mid}"),
+             InlineKeyboardButton("😞 Yo perdí", callback_data=f"result_lose_{mid}")],
+        ])
+
     msg_base = (
         f"🔥 *¡Partida #{match_id} encontrada!*\n\n"
         f"🎮 Modo: {mode_label(game_mode)}\n"
         f"🏆 Premio: *{fmt_usd(WIN_PRIZE_USD)}* netos si ganas\n\n"
-        f"{{oponente}}\n"
-        f"🔗 Link de amistad: `{{link}}`\n\n"
+        f"👤 Tu oponente: *{{oponente}}*\n\n"
         f"{rules}\n\n"
-        f"⏰ Tienes *{RESULT_TIMEOUT_MIN} minutos* para reportar el resultado."
+        f"⏰ Tienes *{RESULT_TIMEOUT_MIN} minutos* para reportar."
     )
 
+    # Enviar a J1 — el botón del link abre el perfil de J2
     await bot.send_message(
         chat_id      = telegram_id,
-        text         = msg_base.format(
-            oponente=f"👤 Tu oponente: *{p2['cr_name']}*",
-            link=p2["friend_link"]
-        ),
+        text         = msg_base.format(oponente=p2["cr_name"]),
         parse_mode   = "Markdown",
-        reply_markup = kb_match_result(match_id)
+        reply_markup = kb_match(p2["friend_link"], match_id)
     )
+    # Enviar a J2 — el botón del link abre el perfil de J1
     await bot.send_message(
         chat_id      = opponent["telegram_id"],
-        text         = msg_base.format(
-            oponente=f"👤 Tu oponente: *{p1['cr_name']}*",
-            link=p1["friend_link"]
-        ),
+        text         = msg_base.format(oponente=p1["cr_name"]),
         parse_mode   = "Markdown",
-        reply_markup = kb_match_result(match_id)
+        reply_markup = kb_match(p1["friend_link"], match_id)
     )
 
     # Publicar en grupo
@@ -358,26 +382,33 @@ async def try_match(bot, telegram_id, game_mode, payment_id):
     except Exception as e:
         logger.warning(f"No se pudo publicar en grupo: {e}")
 
-    # Programar recordatorio a los 3 min y timeout a los 5 min
-    from telegram.ext import CallbackContext
-    job_data = {
-        "match_id": match_id,
-        "p1_id": telegram_id,
-        "p2_id": opponent["telegram_id"],
-        "game_mode": game_mode,
-    }
-    bot.application.job_queue.run_once(
-        _reminder_job, RESULT_REMINDER_MIN * 60,
-        data=job_data, name=f"reminder_{match_id}"
-    )
-    bot.application.job_queue.run_once(
-        _timeout_job, RESULT_TIMEOUT_MIN * 60,
-        data=job_data, name=f"timeout_{match_id}"
-    )
+    # ── Jobs de timeout — requiere application ────────────────────────────────
+    if application:
+        job_data = {
+            "match_id": match_id,
+            "p1_id":    telegram_id,
+            "p2_id":    opponent["telegram_id"],
+            "game_mode": game_mode,
+        }
+        application.job_queue.run_once(
+            _reminder_job,
+            RESULT_REMINDER_MIN * 60,
+            data=job_data,
+            name=f"reminder_{match_id}"
+        )
+        application.job_queue.run_once(
+            _timeout_job,
+            RESULT_TIMEOUT_MIN * 60,
+            data=job_data,
+            name=f"timeout_{match_id}"
+        )
+    else:
+        logger.warning(f"try_match llamado sin application — timeout desactivado para partida #{match_id}")
 
+
+# ── Jobs de timeout ───────────────────────────────────────────────────────────
 
 async def _reminder_job(context):
-    """Recordatorio a los 3 minutos."""
     data     = context.job.data
     match_id = data["match_id"]
     match    = db.get_match(match_id)
@@ -385,15 +416,13 @@ async def _reminder_job(context):
         return
 
     for pid in [data["p1_id"], data["p2_id"]]:
-        report = db.get_match_report(match_id, pid)
-        if report is None:
+        if db.get_match_report(match_id, pid) is None:
             try:
                 await context.bot.send_message(
                     pid,
                     f"⏰ *Recordatorio — Partida #{match_id}*\n\n"
                     f"Te quedan *{RESULT_TIMEOUT_MIN - RESULT_REMINDER_MIN} minutos* "
-                    f"para reportar el resultado.\n"
-                    f"¿Qué pasó en la partida?",
+                    f"para reportar el resultado.",
                     parse_mode="Markdown",
                     reply_markup=kb_match_result(match_id)
                 )
@@ -402,11 +431,6 @@ async def _reminder_job(context):
 
 
 async def _timeout_job(context):
-    """
-    Timeout a los 5 minutos:
-    - Si uno reportó y el otro no → gana quien reportó
-    - Si ninguno reportó → anulación con reembolso
-    """
     data     = context.job.data
     match_id = data["match_id"]
     match    = db.get_match(match_id)
@@ -419,7 +443,7 @@ async def _timeout_job(context):
     r2    = db.get_match_report(match_id, p2_id)
 
     if r1 is None and r2 is None:
-        # Ninguno reportó → anular y reembolsar
+        # Nadie reportó → reembolso
         db.update_match_status(match_id, "voided")
         for pid in [p1_id, p2_id]:
             db.update_player_balance(
@@ -431,40 +455,30 @@ async def _timeout_job(context):
                     pid,
                     f"⏱ *Tiempo agotado — Partida #{match_id}*\n\n"
                     f"Ninguno reportó el resultado.\n"
-                    f"💰 Reembolso: *{fmt_usd(ENTRY_FEE_USD)}* devuelto a tu balance.",
+                    f"💰 Reembolso: *{fmt_usd(ENTRY_FEE_USD)}* a tu balance.",
                     parse_mode="Markdown",
                     reply_markup=kb_compete_again()
                 )
             except Exception as e:
-                logger.error(f"Error timeout reembolso: {e}")
+                logger.error(f"Error reembolso timeout: {e}")
         return
 
-    # Determinar quién reportó y quién no
+    # Uno reportó, el otro no
     if r1 is not None and r2 is None:
-        reporter_id    = p1_id
-        no_reporter_id = p2_id
-        reporter_outcome = r1["outcome"]
+        reporter_id, no_reporter_id = p1_id, p2_id
+        outcome = r1["outcome"]
     elif r2 is not None and r1 is None:
-        reporter_id    = p2_id
-        no_reporter_id = p1_id
-        reporter_outcome = r2["outcome"]
+        reporter_id, no_reporter_id = p2_id, p1_id
+        outcome = r2["outcome"]
     else:
-        # Ambos reportaron pero el job se ejecutó tarde — no hacer nada
-        return
+        return  # ambos ya reportaron, el handle_result lo resolvió
 
-    if reporter_outcome == "win":
-        winner_id = reporter_id
-        loser_id  = no_reporter_id
-    else:
-        winner_id = no_reporter_id
-        loser_id  = reporter_id
+    winner_id = reporter_id if outcome == "win" else no_reporter_id
+    loser_id  = no_reporter_id if outcome == "win" else reporter_id
 
-    # Finalizar a favor del ganador implícito
     await _finalize_match_auto(
         context.bot, match_id, winner_id, loser_id, data["game_mode"]
     )
-
-    # Notificar al que no reportó
     try:
         await context.bot.send_message(
             no_reporter_id,
@@ -478,6 +492,15 @@ async def _timeout_job(context):
         logger.error(f"Error notificando timeout: {e}")
 
 
+def _cancel_match_jobs(application, match_id):
+    try:
+        for name in [f"reminder_{match_id}", f"timeout_{match_id}"]:
+            for j in application.job_queue.get_jobs_by_name(name):
+                j.schedule_removal()
+    except Exception as e:
+        logger.warning(f"No se pudo cancelar job: {e}")
+
+
 # ── Sistema "Yo gané / Yo perdí" ─────────────────────────────────────────────
 
 async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -485,7 +508,7 @@ async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data     = update.callback_query.data
     user     = update.effective_user
     parts    = data.split("_")
-    outcome  = parts[1]       # "win" o "lose"
+    outcome  = parts[1]
     match_id = int(parts[2])
 
     match = db.get_match(match_id)
@@ -496,9 +519,7 @@ async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Verificar si ya reportó
-    already = db.get_match_report(match_id, user.id)
-    if already:
+    if db.get_match_report(match_id, user.id):
         await update.callback_query.answer(
             "Ya reportaste tu resultado. Esperando al oponente...",
             show_alert=True
@@ -507,68 +528,46 @@ async def handle_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.set_match_report(match_id, user.id, outcome)
 
-    # Verificar reporte del oponente
-    other_id = (match["player2_id"] if match["player1_id"] == user.id
-                else match["player1_id"])
+    other_id     = (match["player2_id"] if match["player1_id"] == user.id
+                    else match["player1_id"])
     other_report = db.get_match_report(match_id, other_id)
 
     if other_report is None:
         await update.callback_query.edit_message_text(
             f"✅ Reportaste: *{'🏆 Victoria' if outcome == 'win' else '😞 Derrota'}*\n\n"
             f"Esperando que tu oponente reporte...\n"
-            f"⏰ Tiempo límite: {RESULT_TIMEOUT_MIN} minutos desde el inicio.",
+            f"⏰ Límite: {RESULT_TIMEOUT_MIN} min desde el inicio de la partida.",
             parse_mode="Markdown"
         )
         return
 
-    # Ambos reportaron
     other_outcome = other_report["outcome"]
 
-    # Coincidencia correcta
     if (outcome == "win" and other_outcome == "lose") or \
        (outcome == "lose" and other_outcome == "win"):
         winner_id = user.id if outcome == "win" else other_id
         loser_id  = other_id if outcome == "win" else user.id
-
-        # Cancelar jobs de timeout
-        _cancel_match_jobs(ctx, match_id)
-
+        _cancel_match_jobs(ctx.application, match_id)
         await _finalize_match_auto(
-            update.get_bot(), match_id, winner_id, loser_id,
-            match["game_mode"]
+            update.get_bot(), match_id, winner_id, loser_id, match["game_mode"]
         )
         return
 
     # Conflicto
-    _cancel_match_jobs(ctx, match_id)
+    _cancel_match_jobs(ctx.application, match_id)
     await _open_conflict_dispute(
-        update.get_bot(), match_id, match, user.id, other_id,
-        outcome, other_outcome
+        update.get_bot(), match_id, match,
+        user.id, other_id, outcome, other_outcome
     )
 
 
-def _cancel_match_jobs(ctx, match_id):
-    """Cancela los jobs de recordatorio y timeout de una partida."""
-    try:
-        jobs = ctx.application.job_queue.get_jobs_by_name(f"reminder_{match_id}")
-        for j in jobs:
-            j.schedule_removal()
-        jobs = ctx.application.job_queue.get_jobs_by_name(f"timeout_{match_id}")
-        for j in jobs:
-            j.schedule_removal()
-    except Exception as e:
-        logger.warning(f"No se pudo cancelar job: {e}")
-
-
 async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
-    """Finaliza la partida, acredita saldo y notifica."""
     db.finalize_match(match_id, winner_id)
     total_credit = WIN_PRIZE_USD + ENTRY_FEE_USD
     db.update_player_balance(
         winner_id, total_credit,
         f"Victoria Partida #{match_id}", "prize", match_id
     )
-
     winner = db.get_player(winner_id)
     loser  = db.get_player(loser_id)
 
@@ -577,8 +576,8 @@ async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
         f"🏆 *¡Victoria en Partida #{match_id}!*\n\n"
         f"💰 Premio neto: *{fmt_usd(WIN_PRIZE_USD)}*\n"
         f"💵 Inscripción recuperada: *{fmt_usd(ENTRY_FEE_USD)}*\n"
-        f"✅ *Total acreditado: {fmt_usd(total_credit)}*\n\n"
-        f"Balance actual: {fmt_usd(winner['balance_usd'])}",
+        f"✅ *Total: {fmt_usd(total_credit)}*\n\n"
+        f"Balance: {fmt_usd(winner['balance_usd'])}",
         parse_mode="Markdown",
         reply_markup=kb_compete_again()
     )
@@ -590,7 +589,6 @@ async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
         reply_markup=kb_compete_again()
     )
 
-    # Publicar resultado en grupo
     try:
         await bot.send_message(
             chat_id           = GROUP_ID,
@@ -609,18 +607,26 @@ async def _finalize_match_auto(bot, match_id, winner_id, loser_id, game_mode):
 
 async def _open_conflict_dispute(bot, match_id, match, p_id, other_id,
                                    p_outcome, other_outcome):
-    reason    = f"Conflicto: jugador reportó '{p_outcome}', oponente reportó '{other_outcome}'"
+    reason     = (f"Conflicto: J1 reportó '{p_outcome}', "
+                  f"J2 reportó '{other_outcome}'")
     dispute_id = db.create_dispute(match_id, p_id, reason)
 
     for pid in [p_id, other_id]:
         try:
+            # Marcar en user_data que están esperando capture de disputa
+            # Se hace vía callback especial
             await bot.send_message(
                 pid,
                 f"⚠️ *Disputa automática — Partida #{match_id}*\n\n"
                 f"Los reportes no coinciden.\n"
-                f"El administrador revisará y decidirá el resultado.\n\n"
-                f"📸 Envía tu capture de la pantalla de resultado para apoyar tu caso:",
-                parse_mode="Markdown"
+                f"📸 Envía tu capture de la pantalla de resultado:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "📸 Enviar mi capture",
+                        callback_data=f"submit_dispute_proof_{match_id}"
+                    )
+                ]])
             )
         except Exception as e:
             logger.error(f"Error notificando disputa: {e}")
@@ -639,54 +645,63 @@ async def _open_conflict_dispute(bot, match_id, match, p_id, other_id,
     )
 
 
-def kb_dispute_resolve(dispute_id, p1_id, p2_id):
-    from utils import kb_dispute_resolve as _kb
-    return _kb(dispute_id, p1_id, p2_id)
+# ── Capture de disputa — COMPLETAMENTE SEPARADO del flow de pago ──────────────
 
-
-# ── Capture de resultado en disputa ──────────────────────────────────────────
-
-async def report_result_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def start_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """El jugador presiona 'Enviar mi capture' en una disputa."""
     await update.callback_query.answer()
-    match_id = int(update.callback_query.data.replace("report_result_", ""))
-    ctx.user_data["reporting_match_id"] = match_id
+    raw = update.callback_query.data.replace("submit_dispute_proof_", "")
+    try:
+        match_id = int(raw)
+    except ValueError:
+        await update.callback_query.answer("Error.", show_alert=True)
+        return ConversationHandler.END
+
+    ctx.user_data["dispute_proof_match_id"] = match_id
     await update.callback_query.message.reply_text(
-        "📸 Envía el capture de la pantalla de victoria:"
+        f"📸 Envía el capture de la *Partida #{match_id}*\n"
+        f"_(pantalla de resultado dentro de Clash Royale)_",
+        parse_mode="Markdown"
     )
-    return WAITING_RESULT_PROOF
+    return WAITING_DISPUTE_PROOF
 
 
-async def receive_result_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def receive_dispute_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Recibe el capture de una DISPUTA.
+    Completamente separado del receive_payment_proof.
+    """
     user     = update.effective_user
     file_id  = update.message.photo[-1].file_id
-    match_id = ctx.user_data.get("reporting_match_id")
-    match    = db.get_match(match_id)
+    match_id = ctx.user_data.get("dispute_proof_match_id")
+    match    = db.get_match(match_id) if match_id else None
     player   = db.get_player(user.id)
 
     if not match:
-        await update.message.reply_text("⚠️ Partida no encontrada.")
+        await update.message.reply_text("⚠️ No se encontró la partida de la disputa.")
         return ConversationHandler.END
 
     db.set_match_result_proof(match_id, user.id, file_id)
     await update.message.reply_text(
-        "✅ Capture recibido. El administrador lo revisará.",
+        "✅ Capture de disputa recibido.\n"
+        "El administrador lo revisará y decidirá el resultado.",
         reply_markup=kb_main_menu()
     )
 
     from utils import kb_result_review
     await notify_admin(
         update.get_bot(),
-        f"📸 *Capture — Partida #{match_id}*\n"
+        f"⚖️ *Capture de disputa — Partida #{match_id}*\n"
         f"👤 *{player['cr_name']}*\n"
         f"🎮 {mode_label(match['game_mode'])}",
         reply_markup=kb_result_review(match_id, user.id),
         photo=file_id
     )
-    ctx.user_data.clear()
+    ctx.user_data.pop("dispute_proof_match_id", None)
     return ConversationHandler.END
 
 
-# ── Disputas manuales ─────────────────────────────────────────────────────────
+# ── Disputa manual ────────────────────────────────────────────────────────────
 
 async def open_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -721,8 +736,7 @@ async def submit_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     player     = db.get_player(user.id)
 
     await update.message.reply_text(
-        f"⚖️ *Disputa #{dispute_id} abierta.*\n"
-        "El administrador notificará a ambos jugadores.",
+        f"⚖️ *Disputa #{dispute_id} abierta.*",
         parse_mode="Markdown",
         reply_markup=kb_main_menu()
     )
@@ -732,8 +746,7 @@ async def submit_dispute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         await update.get_bot().send_message(
             opp_id,
-            f"⚠️ Tu oponente abrió una disputa en Partida #{match_id}.\n"
-            "El administrador resolverá pronto."
+            f"⚠️ Tu oponente abrió una disputa en Partida #{match_id}."
         )
     except Exception:
         pass

@@ -1,11 +1,9 @@
 """
-Panel admin v6:
-- Finanzas históricas (hoy/semana/mes)
-- Estadísticas completas separadas de finanzas
-- Límite de victorias que guarda correctamente
-- Editar texto con botón volver
-- Broadcast fix
-- Retiro aprobado con botón volver al panel
+Panel admin v6.1:
+- Límite victorias: ConversationHandler propio, rango 1-20
+- back_to_admin bloqueado en canales
+- try_match llamado con application para timeout
+- Broadcast no captura número de límite
 """
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -25,11 +23,11 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-BROADCAST_MSG, BROADCAST_OK            = range(30, 32)
+BROADCAST_MSG, BROADCAST_OK               = range(30, 32)
 MANAGE_SEARCH, MANAGE_ACTION, MANAGE_BALANCE = range(32, 35)
 TOURN_NAME, TOURN_MODE, TOURN_FEE, TOURN_PRIZE, TOURN_CONFIRM = range(35, 40)
-EDIT_TEXT_SELECT, EDIT_TEXT_INPUT      = range(40, 42)
-WIN_LIMIT_INPUT                        = 42
+EDIT_TEXT_SELECT, EDIT_TEXT_INPUT         = range(40, 42)
+WIN_LIMIT_INPUT                           = 42   # ← En su propio ConversationHandler
 
 
 def is_admin(uid): return uid in ADMIN_IDS
@@ -53,7 +51,6 @@ def admin_only(func):
 
 @admin_only
 async def cmd_admin_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Limpiar estado para evitar conflictos con el jugador
     ctx.user_data.clear()
     s = db.get_stats()
     await update.message.reply_text(
@@ -68,6 +65,18 @@ async def cmd_admin_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def back_to_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Volver al panel admin.
+    BLOQUEADO en canales — el panel solo funciona en chat privado.
+    """
+    # Si viene de un canal, solo cerrar sin abrir el panel
+    if update.effective_chat and update.effective_chat.type == "channel":
+        await update.callback_query.answer(
+            "El panel admin solo está disponible en el chat privado del bot.",
+            show_alert=True
+        )
+        return ConversationHandler.END
+
     await update.callback_query.answer()
     ctx.user_data.clear()
     s = db.get_stats()
@@ -162,12 +171,15 @@ async def approve_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     await update.get_bot().send_message(
         pay["telegram_id"],
-        f"✅ *Pago aprobado.* "
-        f"Entrando en cola para {mode_label(pay['game_mode'])}... ⏳",
+        f"✅ *Pago aprobado.* Entrando en cola para {mode_label(pay['game_mode'])}... ⏳",
         parse_mode="Markdown"
     )
+    # ← Pasar ctx.application para que funcione el timeout
     from handlers.competition import try_match
-    await try_match(update.get_bot(), pay["telegram_id"], pay["game_mode"], pay_id)
+    await try_match(
+        update.get_bot(), pay["telegram_id"], pay["game_mode"], pay_id,
+        application=ctx.application
+    )
 
 
 @admin_only
@@ -185,8 +197,7 @@ async def reject_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     await update.get_bot().send_message(
         pay["telegram_id"],
-        "❌ *Pago rechazado.* "
-        "Contacta al administrador si crees que es un error.",
+        "❌ *Pago rechazado.* Contacta al administrador si crees que es un error.",
         parse_mode="Markdown"
     )
 
@@ -197,12 +208,8 @@ async def approve_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     wd_id = int(update.callback_query.data.replace("wd_approve_", ""))
     db.update_withdrawal_status(wd_id, "approved")
     wd = db.get_withdrawal(wd_id)
-    # ← Botón volver al panel después de aprobar
     await update.callback_query.edit_message_text(
-        f"💸 *Retiro #{wd_id}*\n\n"
-        f"👤 {wd['cedula']}\n"
-        f"💵 {fmt_usd(wd['amount_usd'])}\n\n"
-        f"✅ *PAGO ENVIADO*",
+        f"💸 *Retiro #{wd_id}*\n\n✅ *PAGO ENVIADO*",
         parse_mode="Markdown",
         reply_markup=kb_back_to_admin()
     )
@@ -221,15 +228,13 @@ async def reject_withdraw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.update_withdrawal_status(wd_id, "rejected")
     wd = db.get_withdrawal(wd_id)
     await update.callback_query.edit_message_text(
-        f"💸 *Retiro #{wd_id}*\n\n"
-        f"❌ *RECHAZADO — saldo devuelto*",
+        f"💸 *Retiro #{wd_id}*\n\n❌ *RECHAZADO — saldo devuelto*",
         parse_mode="Markdown",
         reply_markup=kb_back_to_admin()
     )
     await update.get_bot().send_message(
         wd["telegram_id"],
-        f"❌ Retiro rechazado. "
-        f"Se devolvieron {fmt_usd(wd['amount_usd'])} a tu balance.",
+        f"❌ Retiro rechazado. Se devolvieron {fmt_usd(wd['amount_usd'])} a tu balance.",
         parse_mode="Markdown"
     )
 
@@ -252,10 +257,13 @@ async def approve_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _finalize_match_auto(
         update.get_bot(), match_id, winner_id, loser_id, match["game_mode"]
     )
-    await update.callback_query.edit_message_caption(
-        (update.callback_query.message.caption or "") + "\n\n✅ *Victoria confirmada*",
-        parse_mode="Markdown"
-    )
+    try:
+        await update.callback_query.edit_message_caption(
+            (update.callback_query.message.caption or "") + "\n\n✅ *Victoria confirmada*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
 
 
 @admin_only
@@ -264,18 +272,20 @@ async def reject_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     parts    = update.callback_query.data.replace("res_reject_", "").split("_")
     match_id = int(parts[0])
     db.update_match_status(match_id, "disputed")
-    await update.callback_query.edit_message_caption(
-        (update.callback_query.message.caption or "") +
-        "\n\n⚠️ *Resultado rechazado — en disputa*",
-        parse_mode="Markdown"
-    )
+    try:
+        await update.callback_query.edit_message_caption(
+            (update.callback_query.message.caption or "") +
+            "\n\n⚠️ *Resultado rechazado — en disputa*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
     match = db.get_match(match_id)
     for pid in [match["player1_id"], match["player2_id"]]:
         try:
             await update.get_bot().send_message(
                 pid,
-                f"⚠️ El resultado de Partida #{match_id} fue rechazado. "
-                "El administrador revisará."
+                f"⚠️ El resultado de Partida #{match_id} fue rechazado."
             )
         except Exception:
             pass
@@ -428,7 +438,7 @@ async def admin_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── Estadísticas (solo datos de juego) ───────────────────────────────────────
+# ── Estadísticas ──────────────────────────────────────────────────────────────
 
 @admin_only
 async def admin_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -441,60 +451,46 @@ async def admin_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"   Jugaron hoy: {s['active_today']}\n\n"
         f"⚔️ *Partidas*\n"
         f"   Hoy: {s['today_matches']}\n"
-        f"   Esta semana: {s['week_matches']}\n"
-        f"   Este mes: {s['month_matches']}\n"
-        f"   Total histórico: {s['total_matches']}\n\n"
+        f"   Semana: {s['week_matches']}\n"
+        f"   Mes: {s['month_matches']}\n"
+        f"   Total: {s['total_matches']}\n\n"
         f"🕐 Hora pico: {s['peak_hour']}\n"
-        f"⏳ En cola ahora: {s['queue_count']}\n"
-        f"⚖️ Disputas abiertas: {s['open_disputes']}\n\n"
-        f"🔥 *Mejor racha:* {s['best_streak_player']} "
-        f"({s['best_streak']} victorias consecutivas)",
+        f"⏳ En cola: {s['queue_count']}\n"
+        f"⚖️ Disputas: {s['open_disputes']}\n\n"
+        f"🔥 Mejor racha: *{s['best_streak_player']}* "
+        f"({s['best_streak']} victorias)",
         parse_mode="Markdown",
         reply_markup=kb_admin_main()
     )
 
 
-# ── Finanzas (solo dinero) ────────────────────────────────────────────────────
+# ── Finanzas ──────────────────────────────────────────────────────────────────
 
 @admin_only
 async def admin_finances(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     fin  = db.get_finance_summary()
     rate = await services.get_bcv_rate()
-
-    t = fin["today"]
-    w = fin["week"]
-    m = fin["month"]
-
+    t, w, mo = fin["today"], fin["week"], fin["month"]
     await update.callback_query.edit_message_text(
         f"💰 *Finanzas ArenaX*\n"
         f"📈 Tasa BCV: {services.format_rate(rate)}\n\n"
-
         f"📅 *Hoy*\n"
-        f"   ⚔️ Partidas: {t['matches']}\n"
+        f"   ⚔️ {t['matches']} partidas\n"
         f"   💳 Inscripciones: {fmt_usd(t['inscriptions'])}\n"
-        f"   🏆 Premios pagados: {fmt_usd(t['prizes'])}\n"
-        f"   ✅ *Ganancia neta: {fmt_usd(t['profit'])}*\n\n"
-
-        f"📅 *Esta semana*\n"
-        f"   ⚔️ Partidas: {w['matches']}\n"
-        f"   💳 Inscripciones: {fmt_usd(w['inscriptions'])}\n"
-        f"   ✅ *Ganancia neta: {fmt_usd(w['profit'])}*\n\n"
-
-        f"📅 *Este mes*\n"
-        f"   ⚔️ Partidas: {m['matches']}\n"
-        f"   💳 Inscripciones: {fmt_usd(m['inscriptions'])}\n"
-        f"   ✅ *Ganancia neta: {fmt_usd(m['profit'])}*\n\n"
-
+        f"   ✅ *Ganancia: {fmt_usd(t['profit'])}*\n\n"
+        f"📅 *Semana*\n"
+        f"   ⚔️ {w['matches']} partidas\n"
+        f"   ✅ *Ganancia: {fmt_usd(w['profit'])}*\n\n"
+        f"📅 *Mes*\n"
+        f"   ⚔️ {mo['matches']} partidas\n"
+        f"   ✅ *Ganancia: {fmt_usd(mo['profit'])}*\n\n"
         f"📊 *Total histórico*\n"
-        f"   💳 Total inscripciones: {fmt_usd(fin['total_in'])}\n"
-        f"   🏆 Total premios: {fmt_usd(fin['total_prizes'])}\n"
-        f"   ✅ *Ganancia total: {fmt_usd(fin['total_profit'])}*\n\n"
-
+        f"   💳 {fmt_usd(fin['total_in'])}\n"
+        f"   ✅ *Ganancia: {fmt_usd(fin['total_profit'])}*\n\n"
         f"💰 Saldo jugadores: {fmt_usd(fin['player_balance'])}\n"
         f"⏳ Retiros pendientes: {fin['pending_withdrawals']} "
-        f"({fmt_usd(fin['pending_wd_usd'])})\n"
-        f"⏳ Pagos pendientes: {fin['pending_payments']}",
+        f"({fmt_usd(fin['pending_wd_usd'])})",
         parse_mode="Markdown",
         reply_markup=kb_admin_main()
     )
@@ -539,12 +535,12 @@ async def manage_player_found(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return MANAGE_SEARCH
     ctx.user_data["manage_player_id"] = player["telegram_id"]
     pct   = fmt_pct(player["total_wins"], player["total_matches"])
-    icons = {"active": "🟢 Activo", "suspended": "🟡 Suspendido", "banned": "🔴 Baneado"}
+    icons = {"active": "🟢 Activo", "suspended": "🟡 Suspendido",
+             "banned": "🔴 Baneado"}
     await update.message.reply_text(
         f"👤 *{player['cr_name']}* (`{player['cr_tag']}`)\n"
         f"💰 {fmt_usd(player['balance_usd'])} | "
         f"🎯 {player['total_matches']} partidas | {pct}\n"
-        f"🔥 Racha: {player['streak_current']}\n"
         f"📊 {icons.get(player['status'], player['status'])}",
         parse_mode="Markdown",
         reply_markup=kb_manage_player(player["telegram_id"])
@@ -687,7 +683,7 @@ async def tourn_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     ctx.user_data["tourn_mode"] = update.callback_query.data.replace("mode_", "")
     await update.callback_query.edit_message_text(
-        "💳 *3/4 — Inscripción por jugador (USD):*\nEj: `2.00`",
+        "💳 *3/4 — Inscripción (USD):*\nEj: `2.00`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Volver", callback_data="admin_back")]
@@ -784,7 +780,6 @@ async def tourn_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def broadcast_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    # Limpiar estado para evitar el bug de broadcast
     ctx.user_data.clear()
     await update.callback_query.edit_message_text(
         "📢 *Broadcast al grupo oficial*\n\n"
@@ -834,7 +829,7 @@ async def broadcast_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.callback_query.edit_message_text(
-            f"❌ Error: `{e}`\n\nVerifica que el bot sea admin del grupo.",
+            f"❌ Error: `{e}`",
             parse_mode="Markdown", reply_markup=kb_admin_main()
         )
 
@@ -852,11 +847,15 @@ async def edit_texts_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📝 *Editar textos* — ¿Qué deseas editar?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("👋 Bienvenida",             callback_data="text_welcome")],
-            [InlineKeyboardButton("📋 Términos y condiciones", callback_data="text_terms")],
-            [InlineKeyboardButton("💳 Instrucciones de pago",  callback_data="text_payment_instructions")],
-            [InlineKeyboardButton("⚔️ Reglas de partida",      callback_data="text_match_rules")],
-            [InlineKeyboardButton("🔙 Volver",                 callback_data="admin_back")],
+            [InlineKeyboardButton("👋 Bienvenida",
+                                  callback_data="text_welcome")],
+            [InlineKeyboardButton("📋 Términos y condiciones",
+                                  callback_data="text_terms")],
+            [InlineKeyboardButton("💳 Instrucciones de pago",
+                                  callback_data="text_payment_instructions")],
+            [InlineKeyboardButton("⚔️ Reglas de partida",
+                                  callback_data="text_match_rules")],
+            [InlineKeyboardButton("🔙 Volver", callback_data="admin_back")],
         ])
     )
     return EDIT_TEXT_SELECT
@@ -867,11 +866,9 @@ async def edit_text_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     key = update.callback_query.data.replace("text_", "")
     ctx.user_data["edit_text_key"] = key
     current = db.get_text(key)
-    # ← Botón volver al seleccionar texto
     await update.callback_query.edit_message_text(
         f"📝 Texto actual:\n\n`{current[:400]}`\n\n"
-        "Envía el nuevo texto (Markdown soportado):\n"
-        "_O presiona Volver para cancelar._",
+        "Envía el nuevo texto:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Volver", callback_data="admin_edit_texts")]
@@ -886,46 +883,53 @@ async def edit_text_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         db.set_text(key, update.message.text)
     ctx.user_data.clear()
     await update.message.reply_text(
-        "✅ Texto actualizado correctamente.",
-        reply_markup=kb_admin_main()
+        "✅ Texto actualizado.", reply_markup=kb_admin_main()
     )
     return ConversationHandler.END
 
 
-# ── Límite de victorias (CORREGIDO — ahora guarda) ────────────────────────────
+# ── Límite victorias — ConversationHandler propio (fix broadcast) ─────────────
 
 @admin_only
 async def admin_win_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    current = db.get_setting("win_limit_day")
-    ctx.user_data["awaiting_win_limit"] = True
+    current = db.get_setting("win_limit_day") or "10"
     await update.callback_query.edit_message_text(
         f"🔢 *Límite de victorias por día*\n\n"
         f"Actual: *{current}*\n\n"
-        f"Envía el nuevo número entero:",
+        f"Envía el nuevo número _(entre 1 y 20)_:",
         parse_mode="Markdown",
         reply_markup=kb_back_to_admin()
     )
+    return WIN_LIMIT_INPUT
 
 
-async def handle_win_limit_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Handler que guarda el límite de victorias cuando se envía un número."""
-    if not ctx.user_data.get("awaiting_win_limit"):
-        return
+async def save_win_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Guarda el límite con validación 1-20."""
     try:
-        new_limit = int(update.message.text.strip())
-        db.set_setting("win_limit_day", str(new_limit))
-        ctx.user_data.pop("awaiting_win_limit", None)
-        await update.message.reply_text(
-            f"✅ Límite de victorias actualizado a *{new_limit}* por día.",
-            parse_mode="Markdown",
-            reply_markup=kb_admin_main()
-        )
+        value = int(update.message.text.strip())
     except ValueError:
         await update.message.reply_text(
-            "⚠️ Ingresa un número entero válido. Ej: `10`",
+            "⚠️ Ingresa un número entero. Ej: `10`",
             parse_mode="Markdown"
         )
+        return WIN_LIMIT_INPUT
+
+    if value < 1 or value > 20:
+        await update.message.reply_text(
+            f"⚠️ El límite debe estar entre *1 y 20*.\n"
+            f"Enviaste: {value}",
+            parse_mode="Markdown"
+        )
+        return WIN_LIMIT_INPUT
+
+    db.set_setting("win_limit_day", str(value))
+    await update.message.reply_text(
+        f"✅ Límite de victorias actualizado a *{value}* por día.",
+        parse_mode="Markdown",
+        reply_markup=kb_admin_main()
+    )
+    return ConversationHandler.END
 
 
 # ── Sync Sheets ───────────────────────────────────────────────────────────────
@@ -933,7 +937,7 @@ async def handle_win_limit_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 @admin_only
 async def admin_sync_sheets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text("🔄 Sincronizando con Google Sheets...")
+    await update.callback_query.edit_message_text("🔄 Sincronizando...")
     result = services.sync_to_sheets()
     if result["ok"]:
         await update.callback_query.edit_message_text(
@@ -944,8 +948,7 @@ async def admin_sync_sheets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.callback_query.edit_message_text(
-            f"❌ *Error en sync:*\n`{result.get('error', 'desconocido')}`\n\n"
-            "Verifica `GOOGLE_CREDENTIALS_JSON` en Railway.",
+            f"❌ *Error:*\n`{result.get('error', 'desconocido')}`",
             parse_mode="Markdown", reply_markup=kb_admin_main()
         )
 
@@ -956,7 +959,7 @@ async def cmd_sync_sheets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     r = services.sync_to_sheets()
     if r["ok"]:
         await msg.edit_text(
-            f"✅ {r['players']} jugadores, {r['matches']} partidas sincronizados."
+            f"✅ {r['players']} jugadores, {r['matches']} partidas."
         )
     else:
-        await msg.edit_text(f"❌ Error: {r.get('error', 'sin credenciales')}")
+        await msg.edit_text(f"❌ {r.get('error', 'error desconocido')}")

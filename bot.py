@@ -1,5 +1,5 @@
 """
-ArenaX Bot v6 — Fix crítico de estados + timeout 5 min + finanzas históricas
+ArenaX Bot v6.1 — Correcciones críticas
 """
 import logging
 from telegram.ext import (
@@ -35,7 +35,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", common.cmd_cancel)],
         per_message=False,
-        allow_reentry=True,   # ← Fix crítico
+        allow_reentry=True,
     )
 
     # ── Registro ───────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", common.cmd_cancel)],
         per_message=False,
-        allow_reentry=True,   # ← Fix crítico
+        allow_reentry=True,
     )
 
     # ── Competir ───────────────────────────────────────────────────────────────
@@ -86,7 +86,8 @@ def main():
                 MessageHandler(filters.PHOTO, competition.receive_payment_proof),
                 CallbackQueryHandler(competition.pay_from_balance,
                                      pattern="^pay_from_balance$"),
-                CallbackQueryHandler(competition.pay_mobile, pattern="^pay_mobile$"),
+                CallbackQueryHandler(competition.pay_mobile,
+                                     pattern="^pay_mobile$"),
             ],
         },
         fallbacks=[
@@ -94,7 +95,25 @@ def main():
             CallbackQueryHandler(common.back_to_menu, pattern="^menu_main$"),
         ],
         per_message=False,
-        allow_reentry=True,   # ← Fix crítico
+        allow_reentry=True,
+    )
+
+    # ── Capture de disputa — COMPLETAMENTE SEPARADO del flow de pago ──────────
+    dispute_proof_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                competition.start_dispute_proof,
+                pattern="^submit_dispute_proof_"
+            )
+        ],
+        states={
+            competition.WAITING_DISPUTE_PROOF: [
+                MessageHandler(filters.PHOTO, competition.receive_dispute_proof)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", common.cmd_cancel)],
+        per_message=False,
+        allow_reentry=True,
     )
 
     # ── Editar perfil ──────────────────────────────────────────────────────────
@@ -128,11 +147,13 @@ def main():
         ],
         states={
             profile.WITHDRAW_AMOUNT:  [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, profile.confirm_withdraw)
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               profile.confirm_withdraw)
             ],
             profile.WITHDRAW_CONFIRM: [
                 CallbackQueryHandler(
-                    profile.execute_withdraw, pattern="^(withdraw_ok|withdraw_no)$"
+                    profile.execute_withdraw,
+                    pattern="^(withdraw_ok|withdraw_no)$"
                 )
             ],
         },
@@ -181,11 +202,13 @@ def main():
         ],
         states={
             admin.BROADCAST_MSG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.broadcast_confirm)
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               admin.broadcast_confirm)
             ],
             admin.BROADCAST_OK:  [
                 CallbackQueryHandler(
-                    admin.broadcast_send, pattern="^(broadcast_yes|broadcast_no)$"
+                    admin.broadcast_send,
+                    pattern="^(broadcast_yes|broadcast_no)$"
                 )
             ],
         },
@@ -221,17 +244,18 @@ def main():
     # ── Editar textos ──────────────────────────────────────────────────────────
     texts_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(admin.edit_texts_start, pattern="^admin_edit_texts$")
+            CallbackQueryHandler(admin.edit_texts_start,
+                                 pattern="^admin_edit_texts$")
         ],
         states={
             admin.EDIT_TEXT_SELECT: [
                 CallbackQueryHandler(admin.edit_text_select, pattern="^text_"),
-                # Volver al menú de textos desde la edición
                 CallbackQueryHandler(admin.edit_texts_start,
                                      pattern="^admin_edit_texts$"),
             ],
             admin.EDIT_TEXT_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.edit_text_save),
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               admin.edit_text_save),
                 CallbackQueryHandler(admin.edit_texts_start,
                                      pattern="^admin_edit_texts$"),
             ],
@@ -241,18 +265,19 @@ def main():
         allow_reentry=True,
     )
 
-    # ── Capture de resultado en disputa ───────────────────────────────────────
-    result_conv = ConversationHandler(
+    # ── Límite victorias — ConversationHandler propio ─────────────────────────
+    # Separado del broadcast para que no haya conflicto de handlers de texto
+    win_limit_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(competition.report_result_start,
-                                 pattern="^report_result_")
+            CallbackQueryHandler(admin.admin_win_limit, pattern="^admin_win_limit$")
         ],
         states={
-            competition.WAITING_RESULT_PROOF: [
-                MessageHandler(filters.PHOTO, competition.receive_result_proof)
+            admin.WIN_LIMIT_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               admin.save_win_limit)
             ],
         },
-        fallbacks=[CommandHandler("cancel", common.cmd_cancel)],
+        fallbacks=[CallbackQueryHandler(admin.back_to_admin, pattern="^admin_back$")],
         per_message=False,
         allow_reentry=True,
     )
@@ -273,10 +298,16 @@ def main():
         allow_reentry=True,
     )
 
-    # ── Registrar todos los ConversationHandlers ───────────────────────────────
-    for conv in [reset_conv, reg_conv, comp_conv, edit_conv, withdraw_conv,
-                 tournament_conv, broadcast_conv, manage_conv, texts_conv,
-                 result_conv, dispute_conv]:
+    # ── Registrar todos ────────────────────────────────────────────────────────
+    for conv in [
+        reset_conv, reg_conv,
+        dispute_proof_conv,   # ← ANTES de comp_conv para tener prioridad
+        comp_conv,
+        edit_conv, withdraw_conv,
+        tournament_conv, broadcast_conv, manage_conv,
+        texts_conv, win_limit_conv,
+        dispute_conv,
+    ]:
         app.add_handler(conv)
 
     # ── Comandos globales ──────────────────────────────────────────────────────
@@ -321,8 +352,6 @@ def main():
                                          pattern="^admin_disputes$"))
     app.add_handler(CallbackQueryHandler(admin.admin_sync_sheets,
                                          pattern="^admin_sync_sheets$"))
-    app.add_handler(CallbackQueryHandler(admin.admin_win_limit,
-                                         pattern="^admin_win_limit$"))
     app.add_handler(CallbackQueryHandler(admin.back_to_admin,
                                          pattern="^admin_back$"))
 
@@ -348,19 +377,11 @@ def main():
     app.add_handler(CallbackQueryHandler(competition.leave_queue,
                                          pattern="^leave_queue$"))
 
-    # ── Límite de victorias — handler de texto ─────────────────────────────────
-    # Captura el número enviado después de presionar "Límite victorias"
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        admin.handle_win_limit_input
-    ))
-
-    # ── Handler global para callbacks obsoletos (botones viejos) ───────────────
-    # DEBE IR AL FINAL — captura cualquier callback no manejado
+    # ── Handler global para callbacks obsoletos — SIEMPRE AL FINAL ────────────
     app.add_handler(CallbackQueryHandler(common.handle_stale_callback))
 
     setup_jobs(app)
-    logger.info("ArenaX Bot v6 iniciado ✅")
+    logger.info("ArenaX Bot v6.1 iniciado ✅")
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query"]
