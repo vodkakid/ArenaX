@@ -21,7 +21,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-BROADCAST_MSG, BROADCAST_OK               = range(30, 32)
+BROADCAST_MSG, BROADCAST_OK, ADMIN_TEXT_INPUT = range(30, 33)
 MANAGE_SEARCH, MANAGE_ACTION, MANAGE_BALANCE = range(32, 35)
 TOURN_NAME, TOURN_MODE, TOURN_FEE, TOURN_PRIZE, TOURN_CONFIRM = range(35, 40)
 EDIT_TEXT_SELECT, EDIT_TEXT_INPUT         = range(40, 42)
@@ -746,6 +746,28 @@ async def tourn_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── Broadcast ─────────────────────────────────────────────────────────────────
 
 @admin_only
+
+async def handle_admin_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Router único para inputs de texto en el panel admin.
+    Distingue entre broadcast y límite de victorias usando user_data["admin_input_type"].
+    Esto evita que los dos ConversationHandlers interfieran entre sí.
+    """
+    input_type = ctx.user_data.get("admin_input_type", "")
+
+    if input_type == "win_limit":
+        return await save_win_limit(update, ctx)
+    elif input_type == "broadcast":
+        return await broadcast_confirm(update, ctx)
+    else:
+        # Estado desconocido — limpiar y volver al panel
+        ctx.user_data.clear()
+        await update.message.reply_text(
+            "⚠️ Sesión expirada. Usa /admin para continuar.",
+            reply_markup=kb_admin_main()
+        )
+        return ConversationHandler.END
+
 async def broadcast_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     ctx.user_data.clear()

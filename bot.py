@@ -195,17 +195,19 @@ def main():
         allow_reentry=True,
     )
 
-    # ── Broadcast ──────────────────────────────────────────────────────────────
-    broadcast_conv = ConversationHandler(
+    # ── Broadcast + Límite victorias — UN SOLO handler para evitar conflictos ──
+    # Ambos usan ADMIN_TEXT_INPUT y se distinguen por user_data["admin_input_type"]
+    admin_input_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(admin.broadcast_start, pattern="^admin_broadcast$")
+            CallbackQueryHandler(admin.broadcast_start,  pattern="^admin_broadcast$"),
+            CallbackQueryHandler(admin.admin_win_limit,  pattern="^admin_win_limit$"),
         ],
         states={
-            admin.BROADCAST_MSG: [
+            admin.ADMIN_TEXT_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND,
-                               admin.broadcast_confirm)
+                               admin.handle_admin_text_input)
             ],
-            admin.BROADCAST_OK:  [
+            admin.BROADCAST_OK: [
                 CallbackQueryHandler(
                     admin.broadcast_send,
                     pattern="^(broadcast_yes|broadcast_no)$"
@@ -216,6 +218,8 @@ def main():
         per_message=False,
         allow_reentry=True,
     )
+    broadcast_conv  = admin_input_conv  # alias para mantener la lista
+    win_limit_conv  = admin_input_conv  # alias — mismo objeto, no se registra dos veces
 
     # ── Gestionar jugador ──────────────────────────────────────────────────────
     manage_conv = ConversationHandler(
@@ -265,22 +269,7 @@ def main():
         allow_reentry=True,
     )
 
-    # ── Límite victorias — ConversationHandler propio ─────────────────────────
-    # Separado del broadcast para que no haya conflicto de handlers de texto
-    win_limit_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin.admin_win_limit, pattern="^admin_win_limit$")
-        ],
-        states={
-            admin.WIN_LIMIT_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND,
-                               admin.save_win_limit)
-            ],
-        },
-        fallbacks=[CallbackQueryHandler(admin.back_to_admin, pattern="^admin_back$")],
-        per_message=False,
-        allow_reentry=True,
-    )
+    # win_limit_conv ya está incluido en admin_input_conv ↑
 
     # ── Disputa manual ─────────────────────────────────────────────────────────
     dispute_conv = ConversationHandler(
@@ -304,8 +293,8 @@ def main():
         dispute_proof_conv,   # ← ANTES de comp_conv para tener prioridad
         comp_conv,
         edit_conv, withdraw_conv,
-        tournament_conv, broadcast_conv, manage_conv,
-        texts_conv, win_limit_conv,
+        tournament_conv, admin_input_conv, manage_conv,
+        texts_conv,
         dispute_conv,
     ]:
         app.add_handler(conv)
