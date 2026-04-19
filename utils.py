@@ -1,6 +1,4 @@
-"""
-Utilidades: horario, teclados, formateo — ArenaX v6
-"""
+"""Utilidades: teclados, formateo — ArenaX v7"""
 from datetime import datetime
 import pytz
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,12 +7,12 @@ from config import BUSINESS_HOUR_OPEN, BUSINESS_HOUR_CLOSE, BANKS, GAME_MODES
 VET = pytz.timezone("America/Caracas")
 
 
-def is_business_hours() -> bool:
+def is_business_hours():
     now = datetime.now(VET)
     return BUSINESS_HOUR_OPEN <= now.hour < BUSINESS_HOUR_CLOSE
 
 
-def business_hours_str() -> str:
+def business_hours_str():
     return "🕙 10:00 am — 10:00 pm (hora Venezuela)"
 
 
@@ -47,27 +45,24 @@ def kb_terms():
 
 def kb_confirm_tag():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Sí, es mi tag",  callback_data="tag_ok")],
-        [InlineKeyboardButton("❌ Corregir tag",   callback_data="tag_no")],
+        [InlineKeyboardButton("✅ Sí, es mi tag", callback_data="tag_ok")],
+        [InlineKeyboardButton("❌ Corregir tag",  callback_data="tag_no")],
     ])
 
 
-def kb_banks():
+def kb_banks(cancel_data="menu_main"):
     rows = []
     for i in range(0, len(BANKS), 2):
-        row = []
-        for code, name in BANKS[i:i+2]:
-            row.append(InlineKeyboardButton(f"{name[:22]}", callback_data=f"bank_{code}"))
+        row = [InlineKeyboardButton(name[:22], callback_data=f"bank_{code}")
+               for code, name in BANKS[i:i+2]]
         rows.append(row)
-    rows.append([InlineKeyboardButton("🔙 Cancelar", callback_data="menu_main")])
+    rows.append([InlineKeyboardButton("🔙 Cancelar", callback_data=cancel_data)])
     return InlineKeyboardMarkup(rows)
 
 
 def kb_game_modes(back_data="menu_main"):
-    buttons = [
-        [InlineKeyboardButton(label, callback_data=f"mode_{key}")]
-        for key, label in GAME_MODES.items()
-    ]
+    buttons = [[InlineKeyboardButton(label, callback_data=f"mode_{key}")]
+               for key, label in GAME_MODES.items()]
     buttons.append([InlineKeyboardButton("🔙 Volver", callback_data=back_data)])
     return InlineKeyboardMarkup(buttons)
 
@@ -93,7 +88,7 @@ def kb_back_to_admin():
 
 def kb_profile_options():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 Editar pago móvil",   callback_data="profile_edit")],
+        [InlineKeyboardButton("📱 Editar pago móvil",   callback_data="profile_edit_payment")],
         [InlineKeyboardButton("🔗 Editar link amistad", callback_data="profile_edit_friend")],
         [InlineKeyboardButton("🏠 Menú principal",      callback_data="menu_main")],
     ])
@@ -101,8 +96,7 @@ def kb_profile_options():
 
 def kb_in_queue():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Salir de la cola (reembolso)",
-                              callback_data="leave_queue")],
+        [InlineKeyboardButton("❌ Salir de la cola (reembolso)", callback_data="leave_queue")],
     ])
 
 
@@ -117,19 +111,19 @@ def kb_match_result(match_id: int):
 
 def kb_admin_main():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Pagos",       callback_data="admin_payments"),
-         InlineKeyboardButton("💸 Retiros",     callback_data="admin_withdrawals")],
-        [InlineKeyboardButton("🎮 Cola",        callback_data="admin_queue"),
-         InlineKeyboardButton("⚔️ Partidas",    callback_data="admin_matches")],
-        [InlineKeyboardButton("👥 Jugadores",   callback_data="admin_players"),
-         InlineKeyboardButton("📊 Estadísticas",callback_data="admin_stats")],
-        [InlineKeyboardButton("💰 Finanzas",    callback_data="admin_finances"),
-         InlineKeyboardButton("🏆 Torneos",     callback_data="admin_tournaments")],
-        [InlineKeyboardButton("📢 Broadcast",   callback_data="admin_broadcast"),
-         InlineKeyboardButton("📝 Textos",      callback_data="admin_edit_texts")],
-        [InlineKeyboardButton("🔢 Límite wins", callback_data="admin_win_limit"),
-         InlineKeyboardButton("🔄 Sheets",      callback_data="admin_sync_sheets")],
-        [InlineKeyboardButton("⚖️ Disputas",    callback_data="admin_disputes")],
+        [InlineKeyboardButton("💳 Pagos",        callback_data="admin_payments"),
+         InlineKeyboardButton("💸 Retiros",      callback_data="admin_withdrawals")],
+        [InlineKeyboardButton("🎮 Cola",         callback_data="admin_queue"),
+         InlineKeyboardButton("⚔️ Partidas",     callback_data="admin_matches")],
+        [InlineKeyboardButton("👥 Jugadores",    callback_data="admin_players"),
+         InlineKeyboardButton("📊 Estadísticas", callback_data="admin_stats")],
+        [InlineKeyboardButton("💰 Finanzas",     callback_data="admin_finances"),
+         InlineKeyboardButton("🏆 Torneos",      callback_data="admin_tournaments")],
+        [InlineKeyboardButton("📢 Broadcast",    callback_data="admin_broadcast"),
+         InlineKeyboardButton("📝 Textos",       callback_data="admin_edit_texts")],
+        [InlineKeyboardButton("🔢 Límite wins",  callback_data="admin_win_limit"),
+         InlineKeyboardButton("🔄 Sheets",       callback_data="admin_sync_sheets")],
+        [InlineKeyboardButton("⚖️ Disputas",     callback_data="admin_disputes")],
     ])
 
 
@@ -147,21 +141,10 @@ def kb_withdrawal_review(wd_id: int):
     ])
 
 
-def kb_result_review(match_id: int, winner_id: int):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirmar",
-                              callback_data=f"res_approve_{match_id}_{winner_id}"),
-         InlineKeyboardButton("❌ Rechazar",
-                              callback_data=f"res_reject_{match_id}_{winner_id}")],
-    ])
-
-
 def kb_dispute_resolve(dispute_id: int, p1_id: int, p2_id: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Gana J1",
-                              callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
-         InlineKeyboardButton("🏆 Gana J2",
-                              callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
+        [InlineKeyboardButton("🏆 Gana J1", callback_data=f"disp_p1_{dispute_id}_{p1_id}"),
+         InlineKeyboardButton("🏆 Gana J2", callback_data=f"disp_p2_{dispute_id}_{p2_id}")],
         [InlineKeyboardButton("❌ Anular (reembolso a ambos)",
                               callback_data=f"disp_void_{dispute_id}_0")],
     ])

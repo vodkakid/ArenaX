@@ -24,9 +24,9 @@ MIN_WITHDRAW_USD = float(os.getenv("MIN_WITHDRAW_USD",  "2.50"))
 # Ganador recibe: WIN_PRIZE_USD + ENTRY_FEE_USD = $2.50
 # ArenaX gana:   ENTRY_FEE_USD - WIN_PRIZE_USD  = $0.50 por partida
 
-# ── Timeouts ──────────────────────────────────────────────────────────────────
-RESULT_TIMEOUT_MIN  = 5    # minutos para reportar resultado
-RESULT_REMINDER_MIN = 3    # minutos para enviar recordatorio
+# ── Timeouts — Opción A ───────────────────────────────────────────────────────
+RESULT_REMINDER_MIN = int(os.getenv("RESULT_REMINDER_MIN", "10"))  # recordatorio
+RESULT_TIMEOUT_MIN  = int(os.getenv("RESULT_TIMEOUT_MIN",  "15"))  # timeout total
 
 BUSINESS_HOUR_OPEN  = 10
 BUSINESS_HOUR_CLOSE = 22

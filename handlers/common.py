@@ -1,6 +1,4 @@
-"""
-Handlers comunes v6.1
-"""
+"""Handlers comunes v7"""
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 import database as db
@@ -12,26 +10,20 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user   = update.effective_user
     player = db.get_player(user.id)
     if not player:
-        await update.message.reply_text(
-            "⚠️ No tienes cuenta. Usa /start para registrarte."
-        )
+        await update.message.reply_text("⚠️ No tienes cuenta. Usa /start para registrarte.")
         return
     if player["status"] in ("banned", "suspended"):
         await update.message.reply_text("⛔ Tu cuenta está restringida.")
         return
     await update.message.reply_text(
         f"🏠 *Menú principal* — Hola, *{player['cr_name']}* 👋",
-        parse_mode="Markdown",
-        reply_markup=kb_main_menu()
+        parse_mode="Markdown", reply_markup=kb_main_menu()
     )
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
-    await update.message.reply_text(
-        "❌ Operación cancelada.",
-        reply_markup=kb_main_menu()
-    )
+    await update.message.reply_text("❌ Operación cancelada.", reply_markup=kb_main_menu())
     return ConversationHandler.END
 
 
@@ -43,13 +35,11 @@ async def back_to_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name   = player["cr_name"] if player else user.first_name
     await update.callback_query.edit_message_text(
         f"🏠 *Menú principal* — Hola, *{name}* 👋",
-        parse_mode="Markdown",
-        reply_markup=kb_main_menu()
+        parse_mode="Markdown", reply_markup=kb_main_menu()
     )
 
 
 async def handle_stale_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Captura callbacks de botones viejos o inválidos."""
     await update.callback_query.answer(
         "⚠️ Este botón ya no está activo. Usa /menu para continuar.",
         show_alert=True
